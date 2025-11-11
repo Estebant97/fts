@@ -1,2 +1,1 @@
-# fts
-Fast True Switcher (fts)
+# Fast True Switcher (fts)
