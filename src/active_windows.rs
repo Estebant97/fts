@@ -41,6 +41,7 @@ pub struct Window {
     pid: i32,
     app_name: String,
     window_name: String,
+    onscreen: u32,
 }
 
 pub fn get_active_windows() -> Vec<Window> {
@@ -50,7 +51,7 @@ pub fn get_active_windows() -> Vec<Window> {
 
     if window_info.is_null() {
         eprintln!("Failed to get window info");
-        return vec![];
+        return window_list;
     }
 
     let array: core_foundation::array::CFArray<CFDictionary> =
@@ -61,13 +62,13 @@ pub fn get_active_windows() -> Vec<Window> {
     let layer_key = CFString::from_static_string("kCGWindowLayer");
     let alpha_key = CFString::from_static_string("kCGWindowAlpha");
     let pid_key = CFString::from_static_string("kCGWindowOwnerPID");
-    // let onscreen_key = CFString::from_static_string("kCGWindowIsOnscreen");
+    let onscreen_key = CFString::from_static_string("kCGWindowIsOnscreen");
 
     for dict in array.iter() {
         // Filter only normal layer (0), visible (onscreen), and non-zero alpha
         let layer = get_cf_u32(&dict, &layer_key).unwrap_or(0);
         let alpha = get_cf_u32(&dict, &alpha_key).unwrap_or(0);
-        // let onscreen = get_cf_u32(&dict, &onscreen_key).unwrap_or(0);
+        let onscreen = get_cf_u32(&dict, &onscreen_key).unwrap_or(0);
 
         if layer != 0 || alpha == 0 {
             continue; // skip system windows or invisible windows
@@ -76,12 +77,12 @@ pub fn get_active_windows() -> Vec<Window> {
         let owner = get_cf_string(&dict, &owner_key);
         let pid = get_cf_pid(&dict, &pid_key);
         if pid.is_some() && !owner.is_empty() && !name.is_empty() {
-            let window = Window {
+            window_list.push(Window {
                 pid: pid.unwrap(),
                 app_name: name,
                 window_name: owner,
-            };
-            window_list.push(window);
+                onscreen: onscreen,
+            });
         }
     }
     return window_list;
