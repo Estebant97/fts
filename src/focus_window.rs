@@ -15,12 +15,11 @@ pub fn focus_window(window_element: &AXUIElement) {
     if is_app_element {
         // This is an application element (fallback), not a window
         // Try to bring the application to the front
-        eprintln!("[FOCUS] Using app element - attempting to activate application");
 
         let frontmost_attr = AXAttribute::new(&CFString::new("AXFrontmost"));
         let _ = window_element
             .set_attribute(&frontmost_attr, CFBoolean::true_value().as_CFType())
-            .map_err(|e| eprintln!("[FOCUS] Failed to set AXFrontmost: {:?}", e));
+            .map_err(|_e| {});
 
         // Optionally, try to get the focused window and raise it
         let focused_attr = AXAttribute::new(&CFString::new("AXFocusedWindow"));
@@ -30,13 +29,10 @@ pub fn focus_window(window_element: &AXUIElement) {
             };
 
             let raise = CFString::new("AXRaise");
-            let _ = focused_window
-                .perform_action(&raise)
-                .map_err(|e| eprintln!("[FOCUS] AXRaise on focused window failed: {:?}", e));
+            let _ = focused_window.perform_action(&raise).map_err(|_e| {});
         }
     } else {
         // This is a proper window element
-        eprintln!("[FOCUS] Using window element - raising and activating");
 
         // 1. First, get the parent application element
         if let Ok(app_element) = window_element.attribute(&AXAttribute::parent()) {
@@ -44,13 +40,11 @@ pub fn focus_window(window_element: &AXUIElement) {
             let frontmost_attr = AXAttribute::new(&CFString::new("AXFrontmost"));
             let _ = app_element
                 .set_attribute(&frontmost_attr, CFBoolean::true_value().as_CFType())
-                .map_err(|e| eprintln!("[FOCUS] Failed to set AXFrontmost: {:?}", e));
+                .map_err(|_e| {});
         }
 
         // 3. Raise the specific window
         let raise = CFString::new("AXRaise");
-        let _ = window_element
-            .perform_action(&raise)
-            .map_err(|e| eprintln!("[FOCUS] AXRaise failed: {:?}", e));
+        let _ = window_element.perform_action(&raise).map_err(|_e| {});
     }
 }

@@ -78,11 +78,6 @@ pub fn get_active_windows() -> Vec<Window> {
         let owner = get_cf_string(&dict, &owner_key);
         let pid = get_cf_pid(&dict, &pid_key);
 
-        eprintln!(
-            "[DEBUG] CGWindow: app='{}', window='{}', layer={}, alpha={}, onscreen={}",
-            owner, name, layer, alpha, onscreen
-        );
-
         if pid.is_some() && !owner.is_empty() && !name.is_empty() {
             cg_windows_by_pid
                 .entry(pid.unwrap())
@@ -96,18 +91,18 @@ pub fn get_active_windows() -> Vec<Window> {
         let app_element = AXUIElement::application(*pid);
         let app_name = &cg_windows[0].0;
 
-        eprintln!(
-            "[DEBUG] Processing app: {} (PID: {}), CGWindows count: {}",
-            app_name,
-            pid,
-            cg_windows.len()
-        );
+        // eprintln!(
+        //     "[DEBUG] Processing app: {} (PID: {}), CGWindows count: {}",
+        //     app_name,
+        //     pid,
+        //     cg_windows.len()
+        // );
 
         let mut found_window_names = HashSet::new();
 
         // Try to get all windows from the application via AXWindows
         if let Ok(ax_windows) = app_element.attribute(&AXAttribute::windows()) {
-            eprintln!("[DEBUG]   AXWindows count: {}", ax_windows.len());
+            // eprintln!("[DEBUG]   AXWindows count: {}", ax_windows.len());
 
             // Add all windows from AXWindows
             for i in 0..ax_windows.len() {
@@ -120,7 +115,6 @@ pub fn get_active_windows() -> Vec<Window> {
                         let title_str = title_cfstring.to_string();
 
                         if !title_str.is_empty() {
-                            eprintln!("[DEBUG]   ✓ Adding AX window: '{}'", title_str);
                             found_window_names.insert(title_str.clone());
 
                             let onscreen = cg_windows
@@ -158,7 +152,6 @@ pub fn get_active_windows() -> Vec<Window> {
                     let title_str = title_cfstring.to_string();
 
                     if !title_str.is_empty() {
-                        eprintln!("[DEBUG]   ✓ Adding focused window: '{}'", title_str);
                         found_window_names.insert(title_str.clone());
 
                         let onscreen = cg_windows
@@ -183,10 +176,6 @@ pub fn get_active_windows() -> Vec<Window> {
         // These might be fullscreen windows or windows in other spaces
         for (owner, window_name, onscreen) in cg_windows {
             if !window_name.is_empty() && !found_window_names.contains(window_name) {
-                eprintln!(
-                    "[DEBUG]   ⚠ CGWindow '{}' not found via AX API - using app element as fallback",
-                    window_name
-                );
                 window_list.push(Window {
                     pid: *pid,
                     app_name: owner.clone(),
