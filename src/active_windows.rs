@@ -6,7 +6,7 @@ use core_foundation::{
     string::CFString,
 };
 use core_graphics::display::{CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionAll};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::Window;
 /// Extract a string value from a CFDictionary by key
@@ -91,7 +91,7 @@ pub fn get_active_windows() -> Vec<Window> {
         }
     }
 
-    // Second pass: for each unique PID, get all AX windows
+    // Second pass: for each unique PID, get all AX windows and match with CGWindows
     for (pid, cg_windows) in cg_windows_by_pid.iter() {
         let app_element = AXUIElement::application(*pid);
         let app_name = &cg_windows[0].0;
@@ -103,7 +103,9 @@ pub fn get_active_windows() -> Vec<Window> {
             cg_windows.len()
         );
 
-        // Try to get all windows from the application
+        let mut found_window_names = HashSet::new();
+
+        // Try to get all windows from the application via AXWindows
         if let Ok(ax_windows) = app_element.attribute(&AXAttribute::windows()) {
             eprintln!("[DEBUG]   AXWindows count: {}", ax_windows.len());
 
@@ -116,120 +118,48 @@ pub fn get_active_windows() -> Vec<Window> {
                             CFString::wrap_under_get_rule(title_cftype.as_CFTypeRef() as *mut _)
                         };
                         let title_str = title_cfstring.to_string();
-                        eprintln!("[DEBUG]   ✓ Adding AX window: '{}'", title_str);
 
-                        // Find matching onscreen status from CGWindows
-                        let onscreen = cg_windows
-                            .iter()
-                            .find(|(_, name, _)| name == &title_str)
-                            .map(|(_, _, os)| *os)
-                            .unwrap_or(1);
+                        if !title_str.is_empty() {
+                            eprintln!("[DEBUG]   ✓ Adding AX window: '{}'", title_str);
+                            found_window_names.insert(title_str.clone());
 
-                        window_list.push(Window {
-                            pid: *pid,
-                            app_name: app_name.clone(),
-                            window_name: title_str,
-                            onscreen,
-                            element: window_element.clone(),
-                        });
-                    }
-                }
-            }
+                            let onscreen = cg_windows
+                                .iter()
+                                .find(|(_, name, _)| name == &title_str)
+                                .map(|(_, _, os)| *os)
+                                .unwrap_or(1);
 
-            // If we didn't get all windows from AXWindows, try system-wide search
-            let windows_found = window_list.iter().filter(|w| w.pid == *pid).count();
-            if windows_found < cg_windows.len() {
-                eprintln!(
-                    "[DEBUG]   Missing windows! Found {} but expected {}. Trying system-wide search...",
-                    windows_found,
-                    cg_windows.len()
-                );
-                let system_wide = AXUIElement::system_wide();
-                // Try to get all windows from the system
-                if let Ok(all_windows_cftype) =
-                    system_wide.attribute(&AXAttribute::new(&CFString::new("AXWindows")))
-                {
-                    let all_windows: core_foundation::array::CFArray<AXUIElement> = unsafe {
-                        core_foundation::array::CFArray::wrap_under_get_rule(
-                            all_windows_cftype.as_CFTypeRef() as *const _,
-                        )
-                    };
-
-                    eprintln!("[DEBUG]   System-wide windows count: {}", all_windows.len());
-
-                    for i in 0..all_windows.len() {
-                        if let Some(window) = all_windows.get(i) {
-                            // Check if this window belongs to our PID
-                            let pid_attr = AXAttribute::new(&CFString::new("AXPid"));
-                            if let Ok(window_pid_cftype) = window.attribute(&pid_attr) {
-                                let window_pid_cfnum: CFNumber = unsafe {
-                                    CFNumber::wrap_under_get_rule(
-                                        window_pid_cftype.as_CFTypeRef() as *mut _
-                                    )
-                                };
-                                if let Some(window_pid) = window_pid_cfnum.to_i32() {
-                                    if window_pid == *pid {
-                                        let title_attr =
-                                            AXAttribute::new(&CFString::new("AXTitle"));
-                                        if let Ok(title_cftype) = window.attribute(&title_attr) {
-                                            let title_cfstring: CFString = unsafe {
-                                                CFString::wrap_under_get_rule(
-                                                    title_cftype.as_CFTypeRef() as *mut _,
-                                                )
-                                            };
-                                            let title_str = title_cfstring.to_string();
-
-                                            // Check if this matches one of our CGWindows and isn't already in the list
-                                            if cg_windows
-                                                .iter()
-                                                .any(|(_, name, _)| name == &title_str)
-                                                && !window_list.iter().any(|w| {
-                                                    w.pid == *pid && w.window_name == title_str
-                                                })
-                                            {
-                                                eprintln!(
-                                                    "[DEBUG]   ✓ Found via system-wide search: '{}'",
-                                                    title_str
-                                                );
-
-                                                let onscreen = cg_windows
-                                                    .iter()
-                                                    .find(|(_, name, _)| name == &title_str)
-                                                    .map(|(_, _, os)| *os)
-                                                    .unwrap_or(1);
-
-                                                window_list.push(Window {
-                                                    pid: *pid,
-                                                    app_name: app_name.clone(),
-                                                    window_name: title_str,
-                                                    onscreen,
-                                                    element: window.clone(),
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            window_list.push(Window {
+                                pid: *pid,
+                                app_name: app_name.clone(),
+                                window_name: title_str,
+                                onscreen,
+                                element: window_element.clone(),
+                            });
                         }
                     }
                 }
             }
+        }
 
-            // Final fallback: if we still have no windows for this app, try focused window
-            if !window_list.iter().any(|w| w.pid == *pid) {
-                let focused_attr = AXAttribute::new(&CFString::new("AXFocusedWindow"));
-                if let Ok(focused_cftype) = app_element.attribute(&focused_attr) {
-                    let focused_window: AXUIElement = unsafe {
-                        AXUIElement::wrap_under_get_rule(focused_cftype.as_CFTypeRef() as *mut _)
+        // Try focused window if we have no windows yet
+        if found_window_names.is_empty() {
+            let focused_attr = AXAttribute::new(&CFString::new("AXFocusedWindow"));
+            if let Ok(focused_cftype) = app_element.attribute(&focused_attr) {
+                let focused_window: AXUIElement = unsafe {
+                    AXUIElement::wrap_under_get_rule(focused_cftype.as_CFTypeRef() as *mut _)
+                };
+
+                let title_attr = AXAttribute::new(&CFString::new("AXTitle"));
+                if let Ok(title_cftype) = focused_window.attribute(&title_attr) {
+                    let title_cfstring: CFString = unsafe {
+                        CFString::wrap_under_get_rule(title_cftype.as_CFTypeRef() as *mut _)
                     };
+                    let title_str = title_cfstring.to_string();
 
-                    let title_attr = AXAttribute::new(&CFString::new("AXTitle"));
-                    if let Ok(title_cftype) = focused_window.attribute(&title_attr) {
-                        let title_cfstring: CFString = unsafe {
-                            CFString::wrap_under_get_rule(title_cftype.as_CFTypeRef() as *mut _)
-                        };
-                        let title_str = title_cfstring.to_string();
+                    if !title_str.is_empty() {
                         eprintln!("[DEBUG]   ✓ Adding focused window: '{}'", title_str);
+                        found_window_names.insert(title_str.clone());
 
                         let onscreen = cg_windows
                             .iter()
@@ -245,12 +175,26 @@ pub fn get_active_windows() -> Vec<Window> {
                             element: focused_window,
                         });
                     }
-                } else {
-                    eprintln!("[DEBUG]   ✗ No windows available via any method");
                 }
             }
-        } else {
-            eprintln!("[DEBUG]   ✗ Failed to get AXWindows attribute");
+        }
+
+        // Add any CGWindows that we couldn't find via Accessibility API
+        // These might be fullscreen windows or windows in other spaces
+        for (owner, window_name, onscreen) in cg_windows {
+            if !window_name.is_empty() && !found_window_names.contains(window_name) {
+                eprintln!(
+                    "[DEBUG]   ⚠ CGWindow '{}' not found via AX API - using app element as fallback",
+                    window_name
+                );
+                window_list.push(Window {
+                    pid: *pid,
+                    app_name: owner.clone(),
+                    window_name: window_name.clone(),
+                    onscreen: *onscreen,
+                    element: app_element.clone(), // Use app element as fallback
+                });
+            }
         }
     }
 
