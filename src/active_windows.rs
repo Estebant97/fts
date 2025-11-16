@@ -4,6 +4,15 @@ use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_graphics::display::*;
 
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct Window {
+    pub(crate) pid: i32,
+    pub app_name: String,
+    pub window_name: String,
+    pub onscreen: u32,
+}
+
 /// Extract a string value from a CFDictionary by key
 fn get_cf_string(dict: &CFDictionary, key_cf: &CFString) -> String {
     let key_ref = key_cf.as_CFTypeRef();
@@ -33,15 +42,6 @@ fn get_cf_pid(dict: &CFDictionary, key: &CFString) -> Option<i32> {
         let cf_num = CFNumber::wrap_under_get_rule(*v as *const _);
         cf_num.to_i32()
     })
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct Window {
-    pid: i32,
-    app_name: String,
-    window_name: String,
-    onscreen: u32,
 }
 
 pub fn get_active_windows() -> Vec<Window> {
@@ -79,8 +79,8 @@ pub fn get_active_windows() -> Vec<Window> {
         if pid.is_some() && !owner.is_empty() && !name.is_empty() {
             window_list.push(Window {
                 pid: pid.unwrap(),
-                app_name: name,
-                window_name: owner,
+                app_name: owner,
+                window_name: name,
                 onscreen: onscreen,
             });
         }
