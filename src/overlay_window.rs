@@ -15,11 +15,16 @@ use objc::{class, msg_send, sel, sel_impl};
 
 use crate::Window;
 
+pub enum OverlayWindow {
+    Enabled(OverlayState),
+    Disabled,
+}
+
 const PANEL_WIDTH: f64 = 560.0;
 const PANEL_HEIGHT: f64 = 148.0;
 const LABEL_MARGIN: f64 = 24.0;
 
-pub struct OverlayWindow {
+pub struct OverlayState {
     app: id,
     panel: id,
     content_view: id,
@@ -29,6 +34,40 @@ pub struct OverlayWindow {
 
 impl OverlayWindow {
     pub fn new() -> Self {
+        if std::env::var("FTS_DISABLE_OVERLAY").ok().as_deref() == Some("1") {
+            return Self::Disabled;
+        }
+
+        Self::Enabled(OverlayState::new())
+    }
+
+    pub fn show_waiting(&self, total_windows: usize) {
+        if let Self::Enabled(overlay) = self {
+            overlay.show_waiting(total_windows);
+        }
+    }
+
+    pub fn show_selection(&self, position: usize, total_windows: usize, window: &Window) {
+        if let Self::Enabled(overlay) = self {
+            overlay.show_selection(position, total_windows, window);
+        }
+    }
+
+    pub fn hide(&self) {
+        if let Self::Enabled(overlay) = self {
+            overlay.hide();
+        }
+    }
+
+    pub fn pump_events(&self) {
+        if let Self::Enabled(overlay) = self {
+            overlay.pump_events();
+        }
+    }
+}
+
+impl OverlayState {
+    fn new() -> Self {
         unsafe {
             let app = NSApplication::sharedApplication(nil);
             app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);
@@ -96,7 +135,7 @@ impl OverlayWindow {
         }
     }
 
-    pub fn show_waiting(&self, total_windows: usize) {
+    fn show_waiting(&self, total_windows: usize) {
         self.set_text(
             "Switching Windows",
             &format!("Ctrl is held. Press Space to cycle through {total_windows} windows."),
@@ -104,7 +143,7 @@ impl OverlayWindow {
         self.show();
     }
 
-    pub fn show_selection(&self, position: usize, total_windows: usize, window: &Window) {
+    fn show_selection(&self, position: usize, total_windows: usize, window: &Window) {
         self.set_text(
             &window.app_name,
             &format!("{position}/{total_windows}  {}", window.window_name),
@@ -112,14 +151,14 @@ impl OverlayWindow {
         self.show();
     }
 
-    pub fn hide(&self) {
+    fn hide(&self) {
         unsafe {
             self.panel.orderOut_(nil);
             self.pump_events();
         }
     }
 
-    pub fn pump_events(&self) {
+    fn pump_events(&self) {
         unsafe {
             loop {
                 let event = self.app.nextEventMatchingMask_untilDate_inMode_dequeue_(
@@ -144,7 +183,6 @@ impl OverlayWindow {
 
     fn show(&self) {
         unsafe {
-            self.app.activateIgnoringOtherApps_(YES);
             self.panel.center();
             self.panel.orderFrontRegardless();
             self.refresh();
