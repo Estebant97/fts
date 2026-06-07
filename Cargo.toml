@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 accessibility-sys = "0.2.0"
+cocoa = "0.26.1"
 core-graphics = "0.23"
 accessibility = "0.2.0"
 core-foundation = "0.10.1"
+objc = "0.2.7"
 rdev = "0.5"

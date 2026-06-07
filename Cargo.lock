@@ -248,8 +248,10 @@ version = "0.1.0"
 dependencies = [
  "accessibility",
  "accessibility-sys",
+ "cocoa 0.26.1",
  "core-foundation 0.10.1",
  "core-graphics 0.23.2",
+ "objc",
  "rdev",
 ]
 
