@@ -70,8 +70,8 @@ pub fn get_active_windows() -> Vec<Window> {
 
         // Allow normal windows (layer 0) and full-screen windows (layer can be different)
         // Skip only if alpha is 0 (fully transparent/invisible)
-        if alpha == 0 {
-            continue;
+        if layer != 0 || alpha == 0 {
+            continue; // skip system windows or invisible windows
         }
 
         let name = get_cf_string(&dict, &name_key);
@@ -123,13 +123,13 @@ pub fn get_active_windows() -> Vec<Window> {
                                 .map(|(_, _, os)| *os)
                                 .unwrap_or(1);
 
-                            window_list.push(Window {
-                                pid: *pid,
-                                app_name: app_name.clone(),
-                                window_name: title_str,
+                            window_list.push(Window::new(
+                                *pid,
+                                app_name.clone(),
+                                title_str,
                                 onscreen,
-                                element: window_element.clone(),
-                            });
+                                window_element.clone(),
+                            ));
                         }
                     }
                 }
@@ -160,13 +160,13 @@ pub fn get_active_windows() -> Vec<Window> {
                             .map(|(_, _, os)| *os)
                             .unwrap_or(1);
 
-                        window_list.push(Window {
-                            pid: *pid,
-                            app_name: app_name.clone(),
-                            window_name: title_str,
+                        window_list.push(Window::new(
+                            *pid,
+                            app_name.clone(),
+                            title_str,
                             onscreen,
-                            element: focused_window,
-                        });
+                            focused_window,
+                        ));
                     }
                 }
             }
@@ -176,13 +176,13 @@ pub fn get_active_windows() -> Vec<Window> {
         // These might be fullscreen windows or windows in other spaces
         for (owner, window_name, onscreen) in cg_windows {
             if !window_name.is_empty() && !found_window_names.contains(window_name) {
-                window_list.push(Window {
-                    pid: *pid,
-                    app_name: owner.clone(),
-                    window_name: window_name.clone(),
-                    onscreen: *onscreen,
-                    element: app_element.clone(), // Use app element as fallback
-                });
+                window_list.push(Window::new(
+                    *pid,
+                    owner.clone(),
+                    window_name.clone(),
+                    *onscreen,
+                    app_element.clone(), // Use app element as fallback
+                ));
             }
         }
     }
