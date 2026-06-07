@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+accessibility-sys = "0.2.0"
 core-graphics = "0.23"
 accessibility = "0.2.0"
 core-foundation = "0.10.1"

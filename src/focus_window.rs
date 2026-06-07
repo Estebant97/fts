@@ -46,5 +46,15 @@ pub fn focus_window(window_element: &AXUIElement) {
         // 3. Raise the specific window
         let raise = CFString::new("AXRaise");
         let _ = window_element.perform_action(&raise).map_err(|_e| {});
+
+        let main_attr = AXAttribute::new(&CFString::new("AXMain"));
+        let _ = window_element
+            .set_attribute(&main_attr, CFBoolean::true_value().as_CFType())
+            .map_err(|_e| {});
+
+        let focused_attr = AXAttribute::new(&CFString::new("AXFocused"));
+        let _ = window_element
+            .set_attribute(&focused_attr, CFBoolean::true_value().as_CFType())
+            .map_err(|_e| {});
     }
 }
