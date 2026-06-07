@@ -1,24 +1,17 @@
 use accessibility::{AXAttribute, AXUIElement};
 use accessibility_sys::AXUIElementGetPid;
 use core_foundation::{base::TCFType, string::CFString};
-use std::collections::VecDeque;
 
-use crate::{Window, active_windows::get_active_windows};
+use crate::{Window, active_windows::get_active_windows, mru_list::MruList};
 
 pub struct WindowTracker {
-    mru_windows: VecDeque<Window>,
-    selected_index: usize,
-    is_switching: bool,
-    did_advance_selection: bool,
+    mru_windows: MruList<Window>,
 }
 
 impl WindowTracker {
     pub fn new() -> Self {
         let mut tracker = Self {
-            mru_windows: VecDeque::new(),
-            selected_index: 0,
-            is_switching: false,
-            did_advance_selection: false,
+            mru_windows: MruList::new(),
         };
 
         for window in get_active_windows() {
@@ -38,48 +31,26 @@ impl WindowTracker {
     }
 
     pub fn begin_switching(&mut self) {
-        self.is_switching = true;
-        self.selected_index = 0;
-        self.did_advance_selection = false;
+        self.mru_windows.begin_switching();
     }
 
     pub fn advance_selection(&mut self) -> Option<&Window> {
-        if self.mru_windows.len() < 2 {
-            return None;
-        }
-
-        self.selected_index = (self.selected_index + 1) % self.mru_windows.len();
-        self.did_advance_selection = true;
-        self.mru_windows.get(self.selected_index)
+        self.mru_windows.advance_selection()
     }
 
     pub fn selected_window(&self) -> Option<Window> {
-        if !self.did_advance_selection {
-            return None;
-        }
+        self.mru_windows.selected_item().cloned()
+    }
 
-        self.mru_windows.get(self.selected_index).cloned()
+    pub fn selected_position(&self) -> Option<usize> {
+        self.mru_windows.selected_position()
     }
 
     pub fn finish_switching(&mut self) {
-        self.is_switching = false;
-        self.did_advance_selection = false;
-        if self.selected_index == 0 {
-            return;
-        }
-
-        if let Some(window) = self.mru_windows.remove(self.selected_index) {
-            self.mru_windows.push_front(window);
-        }
-
-        self.selected_index = 0;
+        self.mru_windows.finish_switching();
     }
 
     pub fn observe_focused_window(&mut self) {
-        if self.is_switching {
-            return;
-        }
-
         let Some(focused_window) = focused_window() else {
             return;
         };
@@ -88,48 +59,27 @@ impl WindowTracker {
     }
 
     fn move_focused_to_front(&mut self, focused_window: AXUIElement) {
-        if self
-            .mru_windows
-            .front()
-            .is_some_and(|window| window.same_element(&focused_window))
-        {
-            return;
-        }
-
-        if let Some(index) = self
-            .mru_windows
-            .iter()
-            .position(|window| window.same_element(&focused_window))
-        {
-            if let Some(window) = self.mru_windows.remove(index) {
-                self.mru_windows.push_front(window);
-            }
-            return;
-        }
-
         let pid = element_pid(&focused_window).unwrap_or_default();
-        let title = window_title(&focused_window).unwrap_or_else(|| "Untitled Window".to_string());
         let app_name = self
             .mru_windows
             .iter()
             .find(|window| window.pid == pid)
             .map(|window| window.app_name.clone())
             .unwrap_or_else(|| format!("PID {}", pid));
+        let title = window_title(&focused_window).unwrap_or_else(|| "Untitled Window".to_string());
+        let focused_window = Window::new(pid, app_name, title, 1, focused_window);
 
         self.mru_windows
-            .push_front(Window::new(pid, app_name, title, 1, focused_window));
+            .observe_front_by(focused_window, |known_window, focused_window| {
+                known_window.same_element(&focused_window.element)
+            });
     }
 
     fn push_back_unique(&mut self, window: Window) {
-        if self
-            .mru_windows
-            .iter()
-            .any(|known_window| known_window.same_element(&window.element))
-        {
-            return;
-        }
-
-        self.mru_windows.push_back(window);
+        self.mru_windows
+            .push_back_unique_by(window, |known_window, window| {
+                known_window.same_element(&window.element)
+            });
     }
 }
 

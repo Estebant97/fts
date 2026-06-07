@@ -1,5 +1,6 @@
 mod active_windows;
 mod focus_window;
+mod mru_list;
 mod window;
 mod window_tracker;
 
@@ -84,15 +85,16 @@ fn main() {
                 SwitcherEvent::AltPressed => {
                     alt_is_pressed = true;
                     tracker.begin_switching();
-                    println!("ALT pressed - ready to switch windows");
+                    print_switching_started(tracker.len());
                 }
                 SwitcherEvent::TabPressed => {
                     if alt_is_pressed {
-                        if let Some(window) = tracker.advance_selection() {
-                            println!(
-                                "[→] Selecting: {} - {}",
-                                window.app_name, window.window_name
-                            );
+                        if tracker.advance_selection().is_some() {
+                            let position = tracker.selected_position().unwrap_or(0) + 1;
+                            let total = tracker.len();
+                            if let Some(window) = tracker.selected_window() {
+                                print_switching_selection(position, total, &window);
+                            }
                         }
                     }
                 }
@@ -105,6 +107,8 @@ fn main() {
                                 window.app_name, window.window_name
                             );
                             focus_window(&window.element);
+                        } else {
+                            println!("[switch] No window selected");
                         }
                         tracker.finish_switching();
                     }
@@ -115,4 +119,17 @@ fn main() {
             }
         }
     }
+}
+
+fn print_switching_started(total_windows: usize) {
+    println!();
+    println!("================ SWITCHING WINDOWS ================");
+    println!("ALT is held. Press TAB to cycle through {total_windows} windows.");
+}
+
+fn print_switching_selection(position: usize, total_windows: usize, window: &Window) {
+    println!(
+        "[switch {position}/{total_windows}] {} - {}",
+        window.app_name, window.window_name
+    );
 }
