@@ -17,7 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::browser_profile::{
-    BrowserProfile, profile_from_window_title, profile_name_for_directory, profiles_from_local_state,
+    BrowserProfile, product_for_app_name, product_for_local_state_path, profile_from_window_title,
+    profile_name_for_directory, profiles_for_product, profiles_from_local_state,
 };
 use crate::window_enum::{EnumeratedAxWindow, EnumeratedCgWindow, merge_cg_and_ax};
 use crate::window_filter::{is_switchable_window_size, should_include_cg_window};
@@ -274,11 +275,18 @@ fn load_browser_profiles() -> Vec<BrowserProfile> {
     let mut profiles = Vec::new();
     let mut seen = HashSet::new();
     for path in chromium_local_state_paths() {
+        let Some(product) = product_for_local_state_path(&path) else {
+            continue;
+        };
         let Ok(json) = std::fs::read_to_string(&path) else {
             continue;
         };
-        for profile in profiles_from_local_state(&json) {
-            let key = (profile.directory.clone(), profile.name.clone());
+        for profile in profiles_from_local_state(&json, product) {
+            let key = (
+                profile.product.clone(),
+                profile.directory.clone(),
+                profile.name.clone(),
+            );
             if seen.insert(key) {
                 profiles.push(profile);
             }
@@ -382,16 +390,21 @@ fn resolve_profile_name(
     profiles: &[BrowserProfile],
     pid_profile_dirs: &HashMap<i32, Option<String>>,
 ) -> Option<String> {
-    if !is_chromium_family(app_name) || profiles.is_empty() {
+    let product = product_for_app_name(app_name)?;
+    let scoped: Vec<BrowserProfile> = profiles_for_product(profiles, product)
+        .into_iter()
+        .cloned()
+        .collect();
+    if scoped.is_empty() {
         return None;
     }
 
-    if let Some(from_title) = profile_from_window_title(window_title, profiles) {
+    if let Some(from_title) = profile_from_window_title(window_title, &scoped) {
         return Some(from_title);
     }
 
     let directory = pid_profile_dirs.get(&pid).cloned().unwrap_or(None)?;
-    profile_name_for_directory(profiles, &directory)
+    profile_name_for_directory(&scoped, product, &directory)
 }
 
 fn is_chromium_family(app_name: &str) -> bool {

@@ -3,6 +3,8 @@
 
 use std::collections::HashSet;
 
+use crate::focus_resolve::UNTITLED_WINDOW_TITLE;
+
 /// A layer-0/3 CGWindowList row after size/alpha filtering.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumeratedCgWindow {
@@ -53,7 +55,7 @@ pub fn merge_cg_and_ax(
 
     for ax in ax_windows {
         let title = if ax.title.is_empty() {
-            "Untitled Window".to_string()
+            UNTITLED_WINDOW_TITLE.to_string()
         } else {
             ax.title.clone()
         };

@@ -6,7 +6,9 @@ use cocoa::base::nil;
 use core_foundation::{base::TCFType, boolean::CFBoolean, string::CFString};
 
 use crate::active_windows::ax_cg_window_id;
-use crate::focus_resolve::{FocusCandidate, allow_focused_fallback_after_cg_miss, focus_candidate};
+use crate::focus_resolve::{
+    FocusCandidate, ax_title_matches_stored, focus_candidate, take_unique_match,
+};
 use crate::Window;
 
 #[derive(Debug)]
@@ -30,8 +32,7 @@ pub fn focus_window(window: &Window) -> Result<(), FocusError> {
         return Err(FocusError::AppFallback);
     }
 
-    // Prefer re-resolving by CG window id so we raise the intended Chrome
-    // profile window even if the cached AXUIElement went stale.
+    // CG id → cached element → unique title match. Never guess AXFocusedWindow.
     let target = resolve_window_element(window).unwrap_or_else(|| window.element.clone());
     unminimize(&target);
     activate_app(window.pid)?;
@@ -78,16 +79,14 @@ fn raise_window(window_element: &AXUIElement) -> Result<(), FocusError> {
     Ok(())
 }
 
-/// Find the live AX window for `window`, preferring CG window id equality.
+/// Find the live AX window for `window`.
 ///
-/// Does **not** fall back to `AXFocusedWindow` when a CG id is known but
-/// unmatched — that fallback is what left the other Chrome profile in front.
+/// Order: CG window id → cached element (still in the live list) → unique
+/// title match. Returns `None` so the caller can keep `window.element` when
+/// re-resolve is inconclusive. Does **not** use `AXFocusedWindow`.
 fn resolve_window_element(window: &Window) -> Option<AXUIElement> {
     let app_element = AXUIElement::application(window.pid);
     let Ok(ax_windows) = app_element.attribute(&AXAttribute::windows()) else {
-        if allow_focused_fallback_after_cg_miss(window.cg_window_id) {
-            return focused_window_of(&app_element);
-        }
         return None;
     };
 
@@ -103,29 +102,43 @@ fn resolve_window_element(window: &Window) -> Option<AXUIElement> {
                     return Some(window_element.clone());
                 }
             }
+            // Known id but not listed — let the caller raise the cached element.
             None
         }
-        FocusCandidate::ByTitle => {
+        FocusCandidate::CachedThenTitle => {
+            // Prefer the element the switcher already selected when it is still live.
+            if !window.is_app_fallback {
+                for i in 0..ax_windows.len() {
+                    let Some(window_element) = ax_windows.get(i) else {
+                        continue;
+                    };
+                    if window.same_element(&window_element) {
+                        return Some(window_element.clone());
+                    }
+                }
+            }
+
+            let mut matches = Vec::new();
             for i in 0..ax_windows.len() {
                 let Some(window_element) = ax_windows.get(i) else {
                     continue;
                 };
-                let Ok(title_cftype) = window_element.attribute(&title_attr) else {
-                    continue;
-                };
-                let title: CFString =
-                    unsafe { CFString::wrap_under_get_rule(title_cftype.as_CFTypeRef() as *mut _) };
-                if title.to_string() == window.window_name {
-                    return Some(window_element.clone());
+                let live_title = window_element
+                    .attribute(&title_attr)
+                    .ok()
+                    .map(|title_cftype| {
+                        let title: CFString = unsafe {
+                            CFString::wrap_under_get_rule(title_cftype.as_CFTypeRef() as *mut _)
+                        };
+                        title.to_string()
+                    })
+                    .unwrap_or_default();
+                if ax_title_matches_stored(&window.window_name, &live_title) {
+                    matches.push(window_element.clone());
                 }
             }
-            focused_window_of(&app_element)
+
+            take_unique_match(matches)
         }
     }
-}
-
-fn focused_window_of(app_element: &AXUIElement) -> Option<AXUIElement> {
-    let focused_attr = AXAttribute::new(&CFString::new("AXFocusedWindow"));
-    let focused_cftype = app_element.attribute(&focused_attr).ok()?;
-    Some(unsafe { AXUIElement::wrap_under_get_rule(focused_cftype.as_CFTypeRef() as *mut _) })
 }
