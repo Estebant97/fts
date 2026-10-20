@@ -272,11 +272,7 @@ fn position_on_active_screen(panel: id) {
             return;
         }
 
-<<<<<<< HEAD
         let visible = NSScreen::visibleFrame(target);
-=======
-        let visible = target.visibleFrame();
->>>>>>> origin/main
         let panel_frame = NSWindow::frame(panel);
         let x = visible.origin.x + (visible.size.width - panel_frame.size.width) / 2.0;
         let y = visible.origin.y + (visible.size.height - panel_frame.size.height) * 0.62;
