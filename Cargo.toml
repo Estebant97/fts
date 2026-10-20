@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility = "0.2.0"
 accessibility-sys = "0.2.0"
 cocoa = "0.26.1"
-core-graphics = "0.23"
-accessibility = "0.2.0"
 core-foundation = "0.10.1"
+core-graphics = "0.23"
+libc = "0.2"
 objc = "0.2.7"
-rdev = "0.5"
+rdev = { version = "0.5", features = ["unstable_grab"] }

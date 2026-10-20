@@ -3,8 +3,8 @@
 use cocoa::{
     appkit::{
         NSApplication, NSApplicationActivationPolicyAccessory, NSBackingStoreBuffered, NSColor,
-        NSEvent, NSEventMask, NSEventType, NSMainMenuWindowLevel, NSTextField, NSView, NSWindow,
-        NSWindowCollectionBehavior, NSWindowStyleMask,
+        NSEvent, NSEventMask, NSEventType, NSMainMenuWindowLevel, NSScreen, NSTextField, NSView,
+        NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
     },
     base::{NO, YES, id, nil},
     foundation::{
@@ -20,16 +20,18 @@ pub enum OverlayWindow {
     Disabled,
 }
 
-const PANEL_WIDTH: f64 = 560.0;
-const PANEL_HEIGHT: f64 = 148.0;
-const LABEL_MARGIN: f64 = 24.0;
+const PANEL_WIDTH: f64 = 420.0;
+const ROW_HEIGHT: f64 = 28.0;
+const HEADER_HEIGHT: f64 = 36.0;
+const LABEL_MARGIN: f64 = 18.0;
+const MAX_ROWS: usize = 7;
 
 pub struct OverlayState {
     app: id,
     panel: id,
     content_view: id,
-    title_label: id,
-    detail_label: id,
+    header_label: id,
+    row_labels: Vec<id>,
 }
 
 impl OverlayWindow {
@@ -41,15 +43,9 @@ impl OverlayWindow {
         Self::Enabled(OverlayState::new())
     }
 
-    pub fn show_waiting(&self, total_windows: usize) {
+    pub fn show_selection(&self, position: usize, total_windows: usize, entries: &[(usize, Window, bool)]) {
         if let Self::Enabled(overlay) = self {
-            overlay.show_waiting(total_windows);
-        }
-    }
-
-    pub fn show_selection(&self, position: usize, total_windows: usize, window: &Window) {
-        if let Self::Enabled(overlay) = self {
-            overlay.show_selection(position, total_windows, window);
+            overlay.show_selection(position, total_windows, entries);
         }
     }
 
@@ -73,10 +69,8 @@ impl OverlayState {
             app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);
             app.finishLaunching();
 
-            let frame = NSRect::new(
-                NSPoint::new(0.0, 0.0),
-                NSSize::new(PANEL_WIDTH, PANEL_HEIGHT),
-            );
+            let height = HEADER_HEIGHT + (MAX_ROWS as f64) * ROW_HEIGHT + LABEL_MARGIN;
+            let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PANEL_WIDTH, height));
             let style = NSWindowStyleMask::NSBorderlessWindowMask;
             let panel = NSWindow::alloc(nil).initWithContentRect_styleMask_backing_defer_(
                 frame,
@@ -91,7 +85,7 @@ impl OverlayState {
             panel.setOpaque_(NO);
             panel.setHasShadow_(YES);
             panel.setBackgroundColor_(NSColor::colorWithSRGBRed_green_blue_alpha_(
-                nil, 0.08, 0.09, 0.11, 0.92,
+                nil, 0.08, 0.09, 0.11, 0.94,
             ));
             panel.setLevel_((NSMainMenuWindowLevel + 2).into());
             panel.setIgnoresMouseEvents_(YES);
@@ -104,50 +98,66 @@ impl OverlayState {
             let content_view = NSView::initWithFrame_(NSView::alloc(nil), frame);
             panel.setContentView_(content_view);
 
-            let title_label = label(
+            let header_label = label(
                 NSRect::new(
-                    NSPoint::new(LABEL_MARGIN, 72.0),
-                    NSSize::new(PANEL_WIDTH - (LABEL_MARGIN * 2.0), 42.0),
+                    NSPoint::new(LABEL_MARGIN, height - LABEL_MARGIN - 22.0),
+                    NSSize::new(PANEL_WIDTH - (LABEL_MARGIN * 2.0), 22.0),
                 ),
-                28.0,
+                13.0,
                 true,
-            );
-            let detail_label = label(
-                NSRect::new(
-                    NSPoint::new(LABEL_MARGIN, 34.0),
-                    NSSize::new(PANEL_WIDTH - (LABEL_MARGIN * 2.0), 28.0),
-                ),
-                16.0,
                 false,
             );
+            content_view.addSubview_(header_label);
 
-            content_view.addSubview_(title_label);
-            content_view.addSubview_(detail_label);
-            panel.center();
+            let mut row_labels = Vec::with_capacity(MAX_ROWS);
+            for index in 0..MAX_ROWS {
+                let y = height - LABEL_MARGIN - HEADER_HEIGHT - ((index as f64 + 1.0) * ROW_HEIGHT);
+                let row = label(
+                    NSRect::new(
+                        NSPoint::new(LABEL_MARGIN, y),
+                        NSSize::new(PANEL_WIDTH - (LABEL_MARGIN * 2.0), ROW_HEIGHT - 4.0),
+                    ),
+                    14.0,
+                    false,
+                    true,
+                );
+                content_view.addSubview_(row);
+                row_labels.push(row);
+            }
 
             Self {
                 app,
                 panel,
                 content_view,
-                title_label,
-                detail_label,
+                header_label,
+                row_labels,
             }
         }
     }
 
-    fn show_waiting(&self, total_windows: usize) {
-        self.set_text(
-            "Switching Windows",
-            &format!("Ctrl is held. Press Space to cycle through {total_windows} windows."),
-        );
-        self.show();
-    }
+    fn show_selection(
+        &self,
+        position: usize,
+        total_windows: usize,
+        entries: &[(usize, Window, bool)],
+    ) {
+        self.set_header(&format!("Switching  {position}/{total_windows}"));
 
-    fn show_selection(&self, position: usize, total_windows: usize, window: &Window) {
-        self.set_text(
-            &window.app_name,
-            &format!("{position}/{total_windows}  {}", window.window_name),
-        );
+        for (slot, row) in self.row_labels.iter().enumerate() {
+            if let Some((_, window, selected)) = entries.get(slot) {
+                let prefix = if *selected { "▸ " } else { "  " };
+                let text = format!(
+                    "{prefix}{} — {}",
+                    window.app_name,
+                    truncate(&window.window_name, 48)
+                );
+                set_label_text(*row, &text);
+                set_label_emphasis(*row, *selected);
+            } else {
+                set_label_text(*row, "");
+            }
+        }
+
         self.show();
     }
 
@@ -173,8 +183,7 @@ impl OverlayState {
                 }
 
                 match event.eventType() {
-                    NSEventType::NSKeyDown | NSEventType::NSKeyUp | NSEventType::NSFlagsChanged => {
-                    }
+                    NSEventType::NSKeyDown | NSEventType::NSKeyUp | NSEventType::NSFlagsChanged => {}
                     _ => self.app.sendEvent_(event),
                 }
             }
@@ -183,28 +192,23 @@ impl OverlayState {
 
     fn show(&self) {
         unsafe {
-            self.panel.center();
+            position_on_active_screen(self.panel);
             self.panel.orderFrontRegardless();
             self.refresh();
             self.pump_events();
         }
     }
 
-    fn set_text(&self, title: &str, detail: &str) {
-        unsafe {
-            let pool = NSAutoreleasePool::new(nil);
-            self.title_label
-                .setStringValue_(NSString::alloc(nil).init_str(title));
-            self.detail_label
-                .setStringValue_(NSString::alloc(nil).init_str(detail));
-            pool.drain();
-        }
+    fn set_header(&self, text: &str) {
+        set_label_text(self.header_label, text);
     }
 
     fn refresh(&self) {
         unsafe {
-            self.title_label.display_();
-            self.detail_label.display_();
+            self.header_label.display_();
+            for row in &self.row_labels {
+                row.display_();
+            }
             self.content_view.display_();
             let _: () = msg_send![self.panel, display];
             let _: () = msg_send![self.panel, update];
@@ -212,7 +216,74 @@ impl OverlayState {
     }
 }
 
-fn label(frame: NSRect, font_size: f64, emphasized: bool) -> id {
+fn truncate(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let trimmed: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{trimmed}…")
+}
+
+fn set_label_text(label: id, text: &str) {
+    unsafe {
+        let pool = NSAutoreleasePool::new(nil);
+        label.setStringValue_(NSString::alloc(nil).init_str(text));
+        pool.drain();
+    }
+}
+
+fn set_label_emphasis(label: id, emphasized: bool) {
+    unsafe {
+        let font: id = if emphasized {
+            msg_send![class!(NSFont), boldSystemFontOfSize: 14.0]
+        } else {
+            msg_send![class!(NSFont), systemFontOfSize: 14.0]
+        };
+        let color = if emphasized {
+            NSColor::colorWithSRGBRed_green_blue_alpha_(nil, 0.95, 0.97, 1.0, 1.0)
+        } else {
+            NSColor::colorWithSRGBRed_green_blue_alpha_(nil, 0.68, 0.74, 0.82, 1.0)
+        };
+        let _: () = msg_send![label, setFont: font];
+        let _: () = msg_send![label, setTextColor: color];
+    }
+}
+
+fn position_on_active_screen(panel: id) {
+    unsafe {
+        let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let screens: id = NSScreen::screens(nil);
+        let count: usize = msg_send![screens, count];
+        let mut target: id = NSScreen::mainScreen(nil);
+
+        for index in 0..count {
+            let screen: id = msg_send![screens, objectAtIndex: index];
+            let frame = screen.frame();
+            let contains = mouse.x >= frame.origin.x
+                && mouse.x <= frame.origin.x + frame.size.width
+                && mouse.y >= frame.origin.y
+                && mouse.y <= frame.origin.y + frame.size.height;
+            if contains {
+                target = screen;
+                break;
+            }
+        }
+
+        if target == nil {
+            panel.center();
+            return;
+        }
+
+        let visible = target.visibleFrame();
+        let panel_frame = panel.frame();
+        let x = visible.origin.x + (visible.size.width - panel_frame.size.width) / 2.0;
+        let y = visible.origin.y + (visible.size.height - panel_frame.size.height) * 0.62;
+        panel.setFrameOrigin_(NSPoint::new(x, y));
+    }
+}
+
+fn label(frame: NSRect, font_size: f64, emphasized: bool, left_align: bool) -> id {
     unsafe {
         let label = NSTextField::initWithFrame_(NSTextField::alloc(nil), frame);
         label.setEditable_(NO);
@@ -220,7 +291,8 @@ fn label(frame: NSRect, font_size: f64, emphasized: bool) -> id {
         let _: () = msg_send![label, setBordered: NO];
         let _: () = msg_send![label, setSelectable: NO];
         let _: () = msg_send![label, setDrawsBackground: NO];
-        let _: () = msg_send![label, setAlignment: 1_i64];
+        let alignment: i64 = if left_align { 0 } else { 1 };
+        let _: () = msg_send![label, setAlignment: alignment];
 
         let font: id = if emphasized {
             msg_send![class!(NSFont), boldSystemFontOfSize: font_size]
