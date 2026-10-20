@@ -2,6 +2,7 @@ pub mod window {
     use accessibility::AXUIElement;
     use core_foundation::base::{CFEqual, TCFType};
 
+    use crate::browser_profile::format_switcher_label;
     use crate::window_identity::{WindowFields, same_window_by_fields};
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub mod window {
         pub cg_window_id: Option<u32>,
         pub app_name: String,
         pub window_name: String,
+        /// Chromium profile display name when known (Work / Personal).
+        pub profile_name: Option<String>,
         pub onscreen: bool,
         /// True when we only have the application AX element (no real window).
         pub is_app_fallback: bool,
@@ -30,6 +33,7 @@ pub mod window {
             cg_window_id: Option<u32>,
             app_name: String,
             window_name: String,
+            profile_name: Option<String>,
             onscreen: bool,
             is_app_fallback: bool,
             element: AXUIElement,
@@ -44,10 +48,19 @@ pub mod window {
                 cg_window_id,
                 app_name,
                 window_name,
+                profile_name,
                 onscreen,
                 is_app_fallback,
                 element,
             }
+        }
+
+        pub fn display_label(&self) -> String {
+            format_switcher_label(
+                &self.app_name,
+                &self.window_name,
+                self.profile_name.as_deref(),
+            )
         }
 
         pub fn same_element(&self, element: &AXUIElement) -> bool {

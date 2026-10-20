@@ -38,10 +38,15 @@ FTS_DISABLE_OVERLAY=1 cargo run --release
 
 ## Develop
 
-Pure logic (`mru_list`, `window_filter`) is platform-free:
+Pure logic (`mru_list`, `window_filter`, `window_enum`, `window_identity`,
+`browser_profile`, `focus_resolve`) is platform-free:
 
 ```bash
 cargo test
 ```
 
 macOS-only modules compile only on `target_os = "macos"`.
+
+Ghostty windows (including Float on Top) are included via floating-layer CG
+rows and NSWorkspace pid discovery. Chrome work/personal profiles stay distinct
+by CG window id and show as `Google Chrome · Work — …` in the overlay.

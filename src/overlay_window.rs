@@ -146,11 +146,8 @@ impl OverlayState {
         for (slot, row) in self.row_labels.iter().enumerate() {
             if let Some((_, window, selected)) = entries.get(slot) {
                 let prefix = if *selected { "▸ " } else { "  " };
-                let text = format!(
-                    "{prefix}{} — {}",
-                    window.app_name,
-                    truncate(&window.window_name, 48)
-                );
+                let label = window.display_label();
+                let text = format!("{prefix}{}", truncate(&label, 64));
                 set_label_text(*row, &text);
                 set_label_emphasis(*row, *selected);
             } else {
@@ -275,7 +272,7 @@ fn position_on_active_screen(panel: id) {
             return;
         }
 
-        let visible = target.visibleFrame();
+        let visible = NSScreen::visibleFrame(target);
         let panel_frame = NSWindow::frame(panel);
         let x = visible.origin.x + (visible.size.width - panel_frame.size.width) / 2.0;
         let y = visible.origin.y + (visible.size.height - panel_frame.size.height) * 0.62;
