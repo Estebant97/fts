@@ -499,8 +499,9 @@ pub fn get_active_windows() -> Vec<Window> {
                 let Some(window_element) = ax_windows.get(i) else {
                     continue;
                 };
+                // CFArray::get returns ItemRef<'_, AXUIElement>; clone to own.
                 push_ax_window(
-                    window_element,
+                    window_element.clone(),
                     &mut ax_elements,
                     &mut enumerated_ax,
                 );
