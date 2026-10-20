@@ -5,6 +5,8 @@ use cocoa::appkit::{NSApplicationActivateIgnoringOtherApps, NSRunningApplication
 use cocoa::base::nil;
 use core_foundation::{base::TCFType, boolean::CFBoolean, string::CFString};
 
+use crate::active_windows::ax_cg_window_id;
+use crate::focus_resolve::{FocusCandidate, allow_focused_fallback_after_cg_miss, focus_candidate};
 use crate::Window;
 
 #[derive(Debug)]
@@ -28,9 +30,12 @@ pub fn focus_window(window: &Window) -> Result<(), FocusError> {
         return Err(FocusError::AppFallback);
     }
 
-    unminimize(&window.element);
+    // Prefer re-resolving by CG window id so we raise the intended Chrome
+    // profile window even if the cached AXUIElement went stale.
+    let target = resolve_window_element(window).unwrap_or_else(|| window.element.clone());
+    unminimize(&target);
     activate_app(window.pid)?;
-    raise_window(&window.element)
+    raise_window(&target)
 }
 
 fn activate_app(pid: i32) -> Result<(), FocusError> {
@@ -73,28 +78,50 @@ fn raise_window(window_element: &AXUIElement) -> Result<(), FocusError> {
     Ok(())
 }
 
+/// Find the live AX window for `window`, preferring CG window id equality.
+///
+/// Does **not** fall back to `AXFocusedWindow` when a CG id is known but
+/// unmatched — that fallback is what left the other Chrome profile in front.
 fn resolve_window_element(window: &Window) -> Option<AXUIElement> {
     let app_element = AXUIElement::application(window.pid);
     let Ok(ax_windows) = app_element.attribute(&AXAttribute::windows()) else {
-        return focused_window_of(&app_element);
+        if allow_focused_fallback_after_cg_miss(window.cg_window_id) {
+            return focused_window_of(&app_element);
+        }
+        return None;
     };
 
     let title_attr = AXAttribute::new(&CFString::new("AXTitle"));
-    for i in 0..ax_windows.len() {
-        let Some(window_element) = ax_windows.get(i) else {
-            continue;
-        };
-        let Ok(title_cftype) = window_element.attribute(&title_attr) else {
-            continue;
-        };
-        let title: CFString =
-            unsafe { CFString::wrap_under_get_rule(title_cftype.as_CFTypeRef() as *mut _) };
-        if title.to_string() == window.window_name {
-            return Some(window_element.clone());
+
+    match focus_candidate(window.cg_window_id) {
+        FocusCandidate::ByCgWindowId(target_id) => {
+            for i in 0..ax_windows.len() {
+                let Some(window_element) = ax_windows.get(i) else {
+                    continue;
+                };
+                if ax_cg_window_id(&window_element) == Some(target_id) {
+                    return Some(window_element.clone());
+                }
+            }
+            None
+        }
+        FocusCandidate::ByTitle => {
+            for i in 0..ax_windows.len() {
+                let Some(window_element) = ax_windows.get(i) else {
+                    continue;
+                };
+                let Ok(title_cftype) = window_element.attribute(&title_attr) else {
+                    continue;
+                };
+                let title: CFString =
+                    unsafe { CFString::wrap_under_get_rule(title_cftype.as_CFTypeRef() as *mut _) };
+                if title.to_string() == window.window_name {
+                    return Some(window_element.clone());
+                }
+            }
+            focused_window_of(&app_element)
         }
     }
-
-    focused_window_of(&app_element)
 }
 
 fn focused_window_of(app_element: &AXUIElement) -> Option<AXUIElement> {

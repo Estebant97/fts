@@ -14,9 +14,10 @@ pub struct WindowFields<'a> {
 /// `elements_equal` is the AX element equality result from the caller; it is
 /// only consulted when neither side is an app-level fallback row.
 ///
-/// Title+pid matches intentionally ignore `is_app_fallback` so a CG/AX
-/// fallback entry can merge with the real window once focus observation
-/// resolves a concrete AXUIElement.
+/// When both sides have a CG window id, those ids are authoritative: equal
+/// ids match and unequal ids never match, even if titles are identical.
+/// Title+pid matching is reserved for upgrading a CG/AX fallback entry into
+/// the real window once focus observation resolves a concrete AXUIElement.
 pub fn same_window_by_fields(
     left: &WindowFields<'_>,
     right: &WindowFields<'_>,
@@ -26,15 +27,23 @@ pub fn same_window_by_fields(
         return false;
     }
 
-    if let (Some(left_id), Some(right_id)) = (left.cg_window_id, right.cg_window_id) {
-        return left_id == right_id;
+    match (left.cg_window_id, right.cg_window_id) {
+        (Some(left_id), Some(right_id)) => return left_id == right_id,
+        _ => {}
     }
 
     if !left.is_app_fallback && !right.is_app_fallback && elements_equal {
         return true;
     }
 
-    !left.window_name.is_empty() && left.window_name == right.window_name
+    // Title match only bridges a fallback row to a real window (or two
+    // fallbacks). Two concrete AX windows with the same title must not merge
+    // when CG ids are missing — that is how Chrome profiles used to collapse.
+    if left.is_app_fallback || right.is_app_fallback {
+        return !left.window_name.is_empty() && left.window_name == right.window_name;
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -67,6 +76,13 @@ mod tests {
         let left = fields(10, Some(1), "A", false);
         let right = fields(10, Some(2), "A", false);
         assert!(!same_window_by_fields(&left, &right, true));
+    }
+
+    #[test]
+    fn same_title_without_cg_ids_does_not_merge_real_windows() {
+        let left = fields(10, None, "Inbox", false);
+        let right = fields(10, None, "Inbox", false);
+        assert!(!same_window_by_fields(&left, &right, false));
     }
 
     #[test]

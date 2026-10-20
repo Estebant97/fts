@@ -148,6 +148,7 @@ impl WindowTracker {
                 .update_matching_by(|known| known.same_window(window), |known| {
                     known.window_name = window.window_name.clone();
                     known.app_name = window.app_name.clone();
+                    known.profile_name = window.profile_name.clone();
                     known.onscreen = window.onscreen;
                     known.element = window.element.clone();
                     known.is_app_fallback = window.is_app_fallback;
@@ -221,11 +222,21 @@ impl WindowTracker {
                 })
             })
             .and_then(|window| window.cg_window_id);
+        let profile_name = self
+            .mru_windows
+            .iter()
+            .find(|window| {
+                window.pid == pid
+                    && (window.same_element(&focused_window)
+                        || (!window.window_name.is_empty() && window.window_name == title))
+            })
+            .and_then(|window| window.profile_name.clone());
         let focused_window = Window::new(
             pid,
             cg_window_id,
             app_name,
             title,
+            profile_name,
             true,
             false,
             focused_window,

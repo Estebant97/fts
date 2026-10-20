@@ -1,6 +1,9 @@
+mod browser_profile;
+mod focus_resolve;
 mod gesture;
 mod mru_list;
 mod switch_commit;
+mod window_enum;
 mod window_filter;
 mod window_identity;
 
@@ -88,13 +91,13 @@ fn main() {
 
     for (i, window) in tracker.windows().enumerate() {
         println!(
-            "[{}] {} - {} (onscreen: {}, cg: {:?}, fallback: {})",
+            "[{}] {} (onscreen: {}, cg: {:?}, fallback: {}, profile: {:?})",
             i,
-            window.app_name,
-            window.window_name,
+            window.display_label(),
             window.onscreen,
             window.cg_window_id,
-            window.is_app_fallback
+            window.is_app_fallback,
+            window.profile_name
         );
     }
     println!();
@@ -181,10 +184,7 @@ fn main() {
                     }
 
                     if let Some(window) = tracker.selected_window() {
-                        println!(
-                            "\nFocusing: {} - {}\n",
-                            window.app_name, window.window_name
-                        );
+                        println!("\nFocusing: {}\n", window.display_label());
                         let focus_ok = match focus_window(&window) {
                             Ok(()) => true,
                             Err(error) => {
@@ -221,7 +221,7 @@ fn apply_focus_commit(tracker: &mut WindowTracker, focus_ok: bool) {
 #[cfg(target_os = "macos")]
 fn print_switching_selection(position: usize, total_windows: usize, window: &Window) {
     println!(
-        "[switch {position}/{total_windows}] {} - {}",
-        window.app_name, window.window_name
+        "[switch {position}/{total_windows}] {}",
+        window.display_label()
     );
 }
