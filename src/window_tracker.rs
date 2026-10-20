@@ -132,6 +132,11 @@ impl WindowTracker {
         self.refresh_windows_now();
     }
 
+    /// Force a window-list refresh (e.g. after changing Mission Control Space).
+    pub fn refresh_windows(&mut self) {
+        self.refresh_windows_now();
+    }
+
     fn refresh_windows_now(&mut self) {
         self.last_refresh = Instant::now();
         let fresh = get_active_windows();

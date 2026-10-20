@@ -1,5 +1,5 @@
-/// Pure Control+Space gesture state for the switcher.
-/// Tracks modifiers and filters macOS key-repeat on Space.
+/// Pure Control+Space / Option+digit gesture state for the switcher.
+/// Tracks modifiers and filters macOS key-repeat on Space and digits.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GestureKey {
@@ -7,8 +7,14 @@ pub enum GestureKey {
     ControlRight,
     ShiftLeft,
     ShiftRight,
+    /// Left Option (rdev `Alt`).
+    Alt,
+    /// Right Option (rdev `AltGr`).
+    AltGr,
     Space,
     Escape,
+    /// Top-row or keypad digit `0`–`9`.
+    Digit(u8),
     Other,
 }
 
@@ -21,6 +27,8 @@ pub enum GestureInput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GestureAction {
     SpacePressed { reverse: bool },
+    /// Switch to Mission Control Space `index` (1-based, from Option+digit).
+    GoToWorkspace { index: u8 },
     Cancel,
     CtrlReleased,
 }
@@ -31,9 +39,15 @@ pub struct GestureState {
     ctrl_right: bool,
     shift_left: bool,
     shift_right: bool,
+    alt: bool,
+    alt_gr: bool,
     /// True after the first Space key-down until Space is released.
     /// Suppresses autorepeat KeyPress events while held.
     space_held: bool,
+    /// Digit whose key-down we swallowed for an Option+digit chord.
+    /// Kept until that digit's key-up so a fast Option-up-before-digit-up
+    /// still swallows the matching release (and autorepeat).
+    digit_held: Option<u8>,
 }
 
 impl GestureState {
@@ -43,6 +57,10 @@ impl GestureState {
 
     pub fn shift_down(&self) -> bool {
         self.shift_left || self.shift_right
+    }
+
+    pub fn alt_down(&self) -> bool {
+        self.alt || self.alt_gr
     }
 
     /// Handle one keyboard event.
@@ -80,6 +98,28 @@ impl GestureState {
             GestureKey::ShiftRight => {
                 self.shift_right = true;
                 (None, false)
+            }
+            GestureKey::Alt => {
+                self.alt = true;
+                (None, false)
+            }
+            GestureKey::AltGr => {
+                self.alt_gr = true;
+                (None, false)
+            }
+            GestureKey::Digit(digit) => {
+                // Still holding a digit we already swallowed (Option may be up).
+                if self.digit_held == Some(digit) {
+                    return (None, true);
+                }
+                if !self.alt_down() {
+                    return (None, false);
+                }
+                self.digit_held = Some(digit);
+                match crate::space_index::workspace_index_for_digit(digit) {
+                    Some(index) => (Some(GestureAction::GoToWorkspace { index }), true),
+                    None => (None, true),
+                }
             }
             GestureKey::Space if self.ctrl_down() => {
                 if self.space_held {
@@ -132,6 +172,24 @@ impl GestureState {
             GestureKey::ShiftRight => {
                 self.shift_right = false;
                 (None, false)
+            }
+            GestureKey::Alt => {
+                self.alt = false;
+                // Do not clear digit_held — the matching digit key-up must still
+                // be swallowed if Option is released first.
+                (None, false)
+            }
+            GestureKey::AltGr => {
+                self.alt_gr = false;
+                (None, false)
+            }
+            GestureKey::Digit(digit) => {
+                let was_swallowed = self.digit_held == Some(digit);
+                if was_swallowed {
+                    self.digit_held = None;
+                }
+                let swallow = was_swallowed || self.alt_down();
+                (None, swallow)
             }
             GestureKey::Space => {
                 self.space_held = false;
@@ -230,6 +288,121 @@ mod tests {
         let mut state = GestureState::default();
         let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Escape), true);
         assert_eq!(action, Some(GestureAction::Cancel));
+        assert!(swallow);
+    }
+
+    #[test]
+    fn alt_alone_does_not_emit() {
+        let mut state = GestureState::default();
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+        assert_eq!(action, None);
+        assert!(!swallow);
+    }
+
+    #[test]
+    fn digit_without_alt_passes_through() {
+        let mut state = GestureState::default();
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(1)), false);
+        assert_eq!(action, None);
+        assert!(!swallow);
+    }
+
+    #[test]
+    fn alt_digit_emits_workspace_and_swallows() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(3)), false);
+        assert_eq!(action, Some(GestureAction::GoToWorkspace { index: 3 }));
+        assert!(swallow);
+    }
+
+    #[test]
+    fn right_option_digit_also_works() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::AltGr), false);
+
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(1)), false);
+        assert_eq!(action, Some(GestureAction::GoToWorkspace { index: 1 }));
+        assert!(swallow);
+    }
+
+    #[test]
+    fn alt_digit_autorepeat_is_ignored() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+        let _ = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), false);
+
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), true);
+        assert_eq!(action, None);
+        assert!(swallow);
+    }
+
+    #[test]
+    fn alt_digit_after_release_emits_again() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+        let _ = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), false);
+        let _ = state.handle(GestureInput::KeyRelease(GestureKey::Digit(2)), true);
+
+        let (action, _) = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), true);
+        assert_eq!(action, Some(GestureAction::GoToWorkspace { index: 2 }));
+    }
+
+    #[test]
+    fn alt_zero_swallows_without_action() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(0)), false);
+        assert_eq!(action, None);
+        assert!(swallow);
+    }
+
+    #[test]
+    fn alt_digit_works_while_switch_session_active() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(5)), true);
+        assert_eq!(action, Some(GestureAction::GoToWorkspace { index: 5 }));
+        assert!(swallow);
+    }
+
+    #[test]
+    fn alt_nine_maps_to_workspace_nine() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+
+        let (action, _) = state.handle(GestureInput::KeyPress(GestureKey::Digit(9)), false);
+        assert_eq!(action, Some(GestureAction::GoToWorkspace { index: 9 }));
+    }
+
+    #[test]
+    fn option_up_before_digit_up_still_swallows_digit_release() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+        let _ = state.handle(GestureInput::KeyPress(GestureKey::Digit(3)), false);
+
+        // Fast chord: Option released while digit is still down.
+        let (action, swallow) = state.handle(GestureInput::KeyRelease(GestureKey::Alt), false);
+        assert_eq!(action, None);
+        assert!(!swallow);
+
+        let (action, swallow) = state.handle(GestureInput::KeyRelease(GestureKey::Digit(3)), false);
+        assert_eq!(action, None);
+        assert!(swallow);
+    }
+
+    #[test]
+    fn digit_autorepeat_after_option_up_stays_swallowed() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+        let _ = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), false);
+        let _ = state.handle(GestureInput::KeyRelease(GestureKey::Alt), false);
+
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), false);
+        assert_eq!(action, None);
         assert!(swallow);
     }
 }
