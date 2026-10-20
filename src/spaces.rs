@@ -63,8 +63,17 @@ impl fmt::Display for SpaceError {
 
 impl std::error::Error for SpaceError {}
 
+/// Outcome of a Space activation request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpaceSwitch {
+    /// Already on the requested Space — no CGS change.
+    AlreadyActive,
+    /// CGS switched to the requested Space.
+    Switched,
+}
+
 /// Activate the Mission Control Space at 1-based `index` on the focused display.
-pub fn activate_space(index: u8) -> Result<(), SpaceError> {
+pub fn activate_space(index: u8) -> Result<SpaceSwitch, SpaceError> {
     let cid = unsafe { CGSMainConnectionID() };
     let active = unsafe { CGSGetActiveSpace(cid) };
     let displays = copy_user_spaces_per_display(cid)?;
@@ -75,10 +84,11 @@ pub fn activate_space(index: u8) -> Result<(), SpaceError> {
     })?;
 
     if space_id == active {
-        return Ok(());
+        return Ok(SpaceSwitch::AlreadyActive);
     }
 
-    set_current_space(cid, space_id)
+    set_current_space(cid, space_id)?;
+    Ok(SpaceSwitch::Switched)
 }
 
 fn set_current_space(cid: CGSConnectionID, space_id: CGSSpaceID) -> Result<(), SpaceError> {

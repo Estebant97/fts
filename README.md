@@ -38,6 +38,7 @@ FTS_DISABLE_OVERLAY=1 cargo run --release
 - Left and right Option both work; keypad digits map the same as the top row
 - If a Ctrl+Space session is open, Option+N cancels it before changing Space
 - Requesting a Space that does not exist is a no-op (logged)
+- After a Space switch, the MRU onscreen window is focused (or Finder on an empty Space) so the menu bar updates instead of layering previous app menus
 - Space switching uses private SkyLight / CGS APIs and may break on macOS updates
 - The window list refreshes about once per second, when a session starts, and after a Space change
 - After a successful focus, MRU updates pause briefly so the previous app cannot steal front again

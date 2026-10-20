@@ -1,9 +1,31 @@
 use accessibility::{AXAttribute, AXUIElement};
 use accessibility_sys::AXUIElementGetPid;
 use core_foundation::{base::TCFType, string::CFString};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+use crate::space_index::SpaceFocusCandidate;
 use crate::{Window, active_windows::get_active_windows, mru_list::MruList};
+
+/// Stable identity for "was this window onscreen before the Space switch?"
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum OnscreenWindowKey {
+    Cg { pid: i32, cg_window_id: u32 },
+    Ax { pid: i32, ax_ref: usize },
+}
+
+fn onscreen_window_key(window: &Window) -> OnscreenWindowKey {
+    match window.cg_window_id {
+        Some(cg_window_id) => OnscreenWindowKey::Cg {
+            pid: window.pid,
+            cg_window_id,
+        },
+        None => OnscreenWindowKey::Ax {
+            pid: window.pid,
+            ax_ref: window.id.ax_ref,
+        },
+    }
+}
 
 const SETTLE_DURATION: Duration = Duration::from_millis(350);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -135,6 +157,45 @@ impl WindowTracker {
     /// Force a window-list refresh (e.g. after changing Mission Control Space).
     pub fn refresh_windows(&mut self) {
         self.refresh_windows_now();
+    }
+
+    /// Snapshot of windows currently marked onscreen (call before a Space switch).
+    pub fn onscreen_window_keys(&self) -> HashSet<OnscreenWindowKey> {
+        self.mru_windows
+            .iter()
+            .filter(|window| window.onscreen)
+            .map(onscreen_window_key)
+            .collect()
+    }
+
+    /// MRU-preferred window safe to focus after a Space switch.
+    ///
+    /// `previously_onscreen` is the pre-switch snapshot. While CG still reports
+    /// those windows onscreen, this returns `None` so we do not bounce back.
+    pub fn preferred_onscreen_window_after_space_switch(
+        &self,
+        previously_onscreen: &HashSet<OnscreenWindowKey>,
+    ) -> Option<Window> {
+        let candidates: Vec<SpaceFocusCandidate> = self
+            .mru_windows
+            .iter()
+            .map(|window| SpaceFocusCandidate {
+                onscreen: window.onscreen,
+                is_app_fallback: window.is_app_fallback,
+                was_onscreen_before_switch: previously_onscreen
+                    .contains(&onscreen_window_key(window)),
+            })
+            .collect();
+        let index = crate::space_index::preferred_space_focus_index(&candidates)?;
+        self.mru_windows.get(index).cloned()
+    }
+
+    /// Promote a window focused after a Space switch and pause MRU observation briefly.
+    pub fn note_focused_after_space_switch(&mut self, window: &Window) {
+        self.settle_target = Some((window.pid, window.cg_window_id, window.id.ax_ref));
+        self.settle_until = Some(Instant::now() + SETTLE_DURATION);
+        self.mru_windows
+            .observe_front_by(window.clone(), |known, focused| known.same_window(focused));
     }
 
     fn refresh_windows_now(&mut self) {

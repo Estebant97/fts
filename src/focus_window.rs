@@ -1,9 +1,11 @@
-#![allow(deprecated)]
+#![allow(deprecated, unexpected_cfgs)]
 
 use accessibility::{AXAttribute, AXUIElement};
 use cocoa::appkit::{NSApplicationActivateIgnoringOtherApps, NSRunningApplication};
-use cocoa::base::nil;
+use cocoa::base::{id, nil};
+use cocoa::foundation::{NSString, NSUInteger};
 use core_foundation::{base::TCFType, boolean::CFBoolean, string::CFString};
+use objc::{class, msg_send, sel, sel_impl};
 
 use crate::active_windows::ax_cg_window_id;
 use crate::focus_resolve::{
@@ -16,6 +18,38 @@ pub enum FocusError {
     ActivateApp,
     RaiseWindow,
     AppFallback,
+}
+
+/// Activate Finder so an empty Space still has clear menu-bar ownership.
+///
+/// After a CGS Space switch with no onscreen app windows, Dock often leaves
+/// the previous app's menus layered in the menu bar. Bringing Finder forward
+/// forces a clean ownership refresh.
+pub fn activate_finder() -> Result<(), FocusError> {
+    activate_bundle_identifier("com.apple.finder")
+}
+
+fn activate_bundle_identifier(bundle_id: &str) -> Result<(), FocusError> {
+    unsafe {
+        let ns_bundle = NSString::alloc(nil).init_str(bundle_id);
+        let apps: id = msg_send![
+            class!(NSRunningApplication),
+            runningApplicationsWithBundleIdentifier: ns_bundle
+        ];
+        if apps == nil {
+            return Err(FocusError::ActivateApp);
+        }
+        let count: NSUInteger = msg_send![apps, count];
+        if count == 0 {
+            return Err(FocusError::ActivateApp);
+        }
+        let app: id = msg_send![apps, objectAtIndex: 0usize];
+        let _ = NSRunningApplication::activateWithOptions_(
+            app,
+            NSApplicationActivateIgnoringOtherApps,
+        );
+    }
+    Ok(())
 }
 
 pub fn focus_window(window: &Window) -> Result<(), FocusError> {
