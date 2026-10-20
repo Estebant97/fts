@@ -207,10 +207,19 @@ impl WindowTracker {
             .map(|window| window.app_name.clone())
             .unwrap_or_else(|| format!("PID {}", pid));
         let title = window_title(&focused_window).unwrap_or_else(|| "Untitled Window".to_string());
+        // Prefer element match; fall back to title+pid so CG fallback rows
+        // can donate their cg_window_id when focus observation upgrades them.
         let cg_window_id = self
             .mru_windows
             .iter()
             .find(|window| window.same_element(&focused_window))
+            .or_else(|| {
+                self.mru_windows.iter().find(|window| {
+                    window.pid == pid
+                        && !window.window_name.is_empty()
+                        && window.window_name == title
+                })
+            })
             .and_then(|window| window.cg_window_id);
         let focused_window = Window::new(
             pid,

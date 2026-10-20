@@ -114,11 +114,14 @@ impl<T> MruList<T> {
             return;
         }
 
+        // Replace the matched entry with the fresh observation so fallback
+        // rows upgrade to real windows instead of leaving stale identity.
         if self
             .items
             .front()
             .is_some_and(|known_item| same_item(known_item, &item))
         {
+            self.items[0] = item;
             return;
         }
 
@@ -127,9 +130,8 @@ impl<T> MruList<T> {
             .iter()
             .position(|known_item| same_item(known_item, &item))
         {
-            if let Some(item) = self.items.remove(index) {
-                self.items.push_front(item);
-            }
+            self.items.remove(index);
+            self.items.push_front(item);
             return;
         }
 
@@ -361,5 +363,51 @@ mod tests {
         list.retain_by(|item| *item != "b");
 
         assert_eq!(list_items(&list), vec!["a", "c"]);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Tracked {
+        id: &'static str,
+        generation: u32,
+    }
+
+    fn same_tracked(left: &Tracked, right: &Tracked) -> bool {
+        left.id == right.id
+    }
+
+    #[test]
+    fn observe_front_replaces_matched_entry() {
+        let mut list = MruList::new();
+        list.push_back_unique_by(
+            Tracked {
+                id: "doc",
+                generation: 1,
+            },
+            same_tracked,
+        );
+        list.push_back_unique_by(
+            Tracked {
+                id: "other",
+                generation: 1,
+            },
+            same_tracked,
+        );
+
+        list.observe_front_by(
+            Tracked {
+                id: "doc",
+                generation: 2,
+            },
+            same_tracked,
+        );
+
+        assert_eq!(
+            list.get(0),
+            Some(&Tracked {
+                id: "doc",
+                generation: 2,
+            })
+        );
+        assert_eq!(list.len(), 2);
     }
 }

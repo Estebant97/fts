@@ -2,6 +2,8 @@ pub mod window {
     use accessibility::AXUIElement;
     use core_foundation::base::{CFEqual, TCFType};
 
+    use crate::window_identity::{WindowFields, same_window_by_fields};
+
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct WindowId {
         pub pid: i32,
@@ -54,22 +56,21 @@ pub mod window {
         }
 
         pub fn same_window(&self, other: &Window) -> bool {
-            if self.pid != other.pid {
-                return false;
-            }
-
-            if let (Some(left), Some(right)) = (self.cg_window_id, other.cg_window_id) {
-                return left == right;
-            }
-
-            if !self.is_app_fallback && !other.is_app_fallback && self.same_element(&other.element)
-            {
-                return true;
-            }
-
-            !self.window_name.is_empty()
-                && self.window_name == other.window_name
-                && self.is_app_fallback == other.is_app_fallback
+            same_window_by_fields(
+                &WindowFields {
+                    pid: self.pid,
+                    cg_window_id: self.cg_window_id,
+                    window_name: &self.window_name,
+                    is_app_fallback: self.is_app_fallback,
+                },
+                &WindowFields {
+                    pid: other.pid,
+                    cg_window_id: other.cg_window_id,
+                    window_name: &other.window_name,
+                    is_app_fallback: other.is_app_fallback,
+                },
+                self.same_element(&other.element),
+            )
         }
     }
 }
