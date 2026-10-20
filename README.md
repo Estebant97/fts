@@ -50,3 +50,7 @@ macOS-only modules compile only on `target_os = "macos"`.
 Ghostty windows (including Float on Top) are included via floating-layer CG
 rows and NSWorkspace pid discovery. Chrome work/personal profiles stay distinct
 by CG window id and show as `Google Chrome · Work — …` in the overlay.
+
+Only regular apps are switchable. CG-only helper surfaces (AutoFill, Zoom share
+sheets, loginwindow, etc.) are omitted when Accessibility already lists windows
+for that app; CG fallbacks remain only when AX sees nothing for the process.

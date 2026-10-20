@@ -38,11 +38,60 @@ pub struct MergedWindow {
     pub ax_index: Option<usize>,
 }
 
+/// Find an unmatched CG row for this AX window.
+///
+/// Prefer an exact CG window id. When that id was filtered out of the CG list
+/// (size/layer), fall through to title matching so the visible CG surface is
+/// consumed instead of becoming a phantom fallback. Empty-name CG pairing is
+/// only used when Accessibility did not report a CG id (Ghostty / no Screen
+/// Recording).
+fn match_cg_for_ax<'a>(
+    ax: &EnumeratedAxWindow,
+    title: &str,
+    cg_windows: &'a [EnumeratedCgWindow],
+    matched_cg_numbers: &HashSet<u32>,
+) -> Option<&'a EnumeratedCgWindow> {
+    let unmatched = |cg: &&EnumeratedCgWindow| !matched_cg_numbers.contains(&cg.window_number);
+
+    if let Some(id) = ax.cg_window_id {
+        if let Some(cg) = cg_windows
+            .iter()
+            .find(|cg| unmatched(cg) && cg.window_number == id)
+        {
+            return Some(cg);
+        }
+        // Id missing from the filtered CG list — try title before giving up.
+        if !title.is_empty() && title != UNTITLED_WINDOW_TITLE {
+            return cg_windows
+                .iter()
+                .find(|cg| unmatched(cg) && !cg.name.is_empty() && cg.name == title);
+        }
+        return None;
+    }
+
+    if !title.is_empty() && title != UNTITLED_WINDOW_TITLE {
+        if let Some(cg) = cg_windows
+            .iter()
+            .find(|cg| unmatched(cg) && !cg.name.is_empty() && cg.name == title)
+        {
+            return Some(cg);
+        }
+    }
+
+    // No CG id from AX: pair with an empty CG name (Ghostty / blank titles).
+    cg_windows
+        .iter()
+        .find(|cg| unmatched(cg) && cg.name.is_empty())
+}
+
 /// Merge CG and AX windows for one application.
 ///
-/// Pairing prefers CG window ids from Accessibility. Title equality is only
-/// used when the AX side has no id. CG rows that never match become
-/// app-fallback entries (empty titles are kept so Ghostty still appears).
+/// Pairing prefers CG window ids from Accessibility, then title / empty-name
+/// matching. CG-only app-fallback rows are emitted **only when AX lists no
+/// windows** (e.g. Ghostty when Accessibility cannot see its surfaces). When
+/// AX has any windows, unmatched CG rows are dropped — they are almost always
+/// helper panels (Zoom share sheets, AutoFill, permission dialogs) that cannot
+/// be raised and break the switcher.
 pub fn merge_cg_and_ax(
     pid: i32,
     app_name: &str,
@@ -60,18 +109,7 @@ pub fn merge_cg_and_ax(
             ax.title.clone()
         };
 
-        let matched = match ax.cg_window_id {
-            Some(id) => cg_windows
-                .iter()
-                .find(|cg| {
-                    !matched_cg_numbers.contains(&cg.window_number) && cg.window_number == id
-                }),
-            None => cg_windows.iter().find(|cg| {
-                !matched_cg_numbers.contains(&cg.window_number)
-                    && !cg.name.is_empty()
-                    && cg.name == title
-            }),
-        };
+        let matched = match_cg_for_ax(ax, &title, cg_windows, &matched_cg_numbers);
 
         let (cg_window_id, onscreen) = if let Some(cg) = matched {
             matched_cg_numbers.insert(cg.window_number);
@@ -80,11 +118,6 @@ pub fn merge_cg_and_ax(
             // AX knows the CG id even when the CG row was filtered out
             // (other Space / brief off-screen). Keep the id for focus.
             (Some(id), true)
-        } else if let Some(cg) = cg_windows.iter().find(|cg| {
-            !matched_cg_numbers.contains(&cg.window_number) && cg.name.is_empty()
-        }) {
-            matched_cg_numbers.insert(cg.window_number);
-            (Some(cg.window_number), cg.onscreen)
         } else {
             (None, true)
         };
@@ -106,29 +139,32 @@ pub fn merge_cg_and_ax(
         });
     }
 
-    for cg in cg_windows {
-        if matched_cg_numbers.contains(&cg.window_number) {
-            continue;
-        }
-        if !emitted_cg_ids.insert(cg.window_number) {
-            continue;
-        }
+    // Only invent CG-only rows when Accessibility saw nothing for this app.
+    if ax_windows.is_empty() {
+        for cg in cg_windows {
+            if matched_cg_numbers.contains(&cg.window_number) {
+                continue;
+            }
+            if !emitted_cg_ids.insert(cg.window_number) {
+                continue;
+            }
 
-        let window_name = if cg.name.is_empty() {
-            app_name.to_string()
-        } else {
-            cg.name.clone()
-        };
+            let window_name = if cg.name.is_empty() {
+                app_name.to_string()
+            } else {
+                cg.name.clone()
+            };
 
-        window_list.push(MergedWindow {
-            pid,
-            cg_window_id: Some(cg.window_number),
-            app_name: cg.owner.clone(),
-            window_name,
-            onscreen: cg.onscreen,
-            is_app_fallback: true,
-            ax_index: None,
-        });
+            window_list.push(MergedWindow {
+                pid,
+                cg_window_id: Some(cg.window_number),
+                app_name: cg.owner.clone(),
+                window_name,
+                onscreen: cg.onscreen,
+                is_app_fallback: true,
+                ax_index: None,
+            });
+        }
     }
 
     window_list
@@ -255,5 +291,43 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].window_name, "A");
         assert_eq!(merged[0].ax_index, Some(0));
+    }
+
+    #[test]
+    fn unmatched_cg_helpers_dropped_when_ax_has_windows() {
+        // Zoom-style noise: real meeting window in AX, plus CG-only panels.
+        let cg_windows = vec![
+            cg(100, "Zoom Meeting"),
+            cg(101, "Breakout rooms"),
+            cg(102, "Select a window or an application that you want to share"),
+            cg(103, "Zoom Client Healthcheck"),
+        ];
+        let ax_windows = vec![ax(0, "Zoom Meeting", Some(100))];
+
+        let merged = merge_cg_and_ax(8, "Zoom", &cg_windows, &ax_windows);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].window_name, "Zoom Meeting");
+        assert!(!merged[0].is_app_fallback);
+        assert!(merged.iter().all(|w| !w.is_app_fallback));
+    }
+
+    #[test]
+    fn ax_id_miss_pairs_by_title_instead_of_emitting_fallback() {
+        // AX reports a filtered-out CG id; the visible CG row shares the title.
+        let cg_windows = vec![cg(50, "Inbox - Gmail")];
+        let ax_windows = vec![ax(0, "Inbox - Gmail", Some(999))];
+
+        let merged = merge_cg_and_ax(3, "Google Chrome", &cg_windows, &ax_windows);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].cg_window_id, Some(50));
+        assert!(!merged[0].is_app_fallback);
+    }
+
+    #[test]
+    fn autofill_style_cg_only_app_still_emits_when_ax_empty() {
+        let cg_windows = vec![cg(1, "AutoFill")];
+        let merged = merge_cg_and_ax(2, "AutoFill", &cg_windows, &[]);
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].is_app_fallback);
     }
 }

@@ -25,11 +25,14 @@ pub fn focus_window(window: &Window) -> Result<(), FocusError> {
             unminimize(&resolved);
             return raise_window(&resolved);
         }
+        // CG-only rows are only enumerated when AX listed no windows for the
+        // app (e.g. Ghostty). Activating the app is the best available focus;
+        // treat it as success so the MRU commit is not cancelled.
         eprintln!(
             "warning: no AX window for {} — {} (activated app only)",
             window.app_name, window.window_name
         );
-        return Err(FocusError::AppFallback);
+        return Ok(());
     }
 
     // CG id → cached element → unique title match. Never guess AXFocusedWindow.

@@ -8,6 +8,28 @@ const MAX_APP_LAYER: i64 = 3;
 /// Chrome and others use tiny windows for find bars / omnibox popovers.
 const MIN_SWITCHABLE_EDGE: f64 = 200.0;
 
+/// Owners that show up in CGWindowList but are never useful switcher targets
+/// (system UI, credential prompts, panel services). Compared case-insensitively.
+const EXCLUDED_OWNER_NAMES: &[&str] = &[
+    "loginwindow",
+    "coreautha",
+    "wifipicker",
+    "wi-fi",
+    "wifi",
+    "autofill",
+    "open and save panel service",
+    "control center",
+    "systemuiserver",
+    "notification center",
+    "dock",
+    "spotlight",
+    "window server",
+    "wallpaper",
+    "universal control",
+    "airplayuiagent",
+    "user notification center",
+];
+
 /// Keep normal and floating application windows; skip menu bar, dock,
 /// overlays (layer ≥ 24), and nearly transparent surfaces.
 pub fn should_include_cg_window(layer: i64, alpha: f64) -> bool {
@@ -25,9 +47,21 @@ pub fn is_switchable_window_size(width: f64, height: f64) -> bool {
         && height > MIN_SWITCHABLE_EDGE
 }
 
+/// Drop system / helper process names that pollute CGWindowList.
+pub fn is_switchable_owner_name(owner: &str) -> bool {
+    let trimmed = owner.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    !EXCLUDED_OWNER_NAMES.iter().any(|excluded| lower == *excluded)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_switchable_window_size, should_include_cg_window};
+    use super::{
+        is_switchable_owner_name, is_switchable_window_size, should_include_cg_window,
+    };
 
     #[test]
     fn keeps_opaque_normal_windows() {
@@ -63,5 +97,23 @@ mod tests {
     fn keeps_full_size_windows() {
         assert!(is_switchable_window_size(201.0, 201.0));
         assert!(is_switchable_window_size(1280.0, 800.0));
+    }
+
+    #[test]
+    fn drops_system_and_helper_owners() {
+        assert!(!is_switchable_owner_name("loginwindow"));
+        assert!(!is_switchable_owner_name("AutoFill"));
+        assert!(!is_switchable_owner_name("Wi-Fi"));
+        assert!(!is_switchable_owner_name("Open and Save Panel Service"));
+        assert!(!is_switchable_owner_name("coreautha"));
+        assert!(!is_switchable_owner_name(""));
+    }
+
+    #[test]
+    fn keeps_normal_app_owners() {
+        assert!(is_switchable_owner_name("Ghostty"));
+        assert!(is_switchable_owner_name("Google Chrome"));
+        assert!(is_switchable_owner_name("Zoom"));
+        assert!(is_switchable_owner_name("ChatGPT"));
     }
 }
