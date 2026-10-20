@@ -21,7 +21,9 @@ use crate::browser_profile::{
     profile_name_for_directory, profiles_for_product, profiles_from_local_state,
 };
 use crate::window_enum::{EnumeratedAxWindow, EnumeratedCgWindow, merge_cg_and_ax};
-use crate::window_filter::{is_switchable_window_size, should_include_cg_window};
+use crate::window_filter::{
+    is_switchable_owner_name, is_switchable_window_size, should_include_cg_window,
+};
 use crate::Window;
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -146,7 +148,7 @@ fn collect_cg_windows() -> Vec<CgWindow> {
             continue;
         };
         let owner = get_cf_string(&dict, &owner_key);
-        if owner.is_empty() {
+        if !is_switchable_owner_name(&owner) {
             continue;
         }
 
@@ -177,6 +179,22 @@ fn ax_window_title(window_element: &AXUIElement) -> Option<String> {
     } else {
         Some(title)
     }
+}
+
+fn push_ax_window(
+    window_element: AXUIElement,
+    ax_elements: &mut Vec<AXUIElement>,
+    enumerated_ax: &mut Vec<EnumeratedAxWindow>,
+) {
+    let title = ax_window_title(&window_element).unwrap_or_default();
+    let cg_window_id = ax_cg_window_id(&window_element);
+    let ax_index = ax_elements.len();
+    ax_elements.push(window_element);
+    enumerated_ax.push(EnumeratedAxWindow {
+        title,
+        cg_window_id,
+        ax_index,
+    });
 }
 
 /// CGWindowID for an AX window via the private `_AXUIElementGetWindow` helper.
@@ -421,17 +439,27 @@ fn is_chromium_family(app_name: &str) -> bool {
 /// Empty CG titles no longer drop the pid; AX windows for that app are still
 /// collected. CG window numbers (via `_AXUIElementGetWindow`) stabilize
 /// identity across refreshes and keep Chrome profiles distinct.
+///
+/// Only `NSApplicationActivationPolicyRegular` apps are switchable. Accessory
+/// processes (AutoFill, Wi-Fi, loginwindow, panel services) are ignored even
+/// when they appear in CGWindowList.
 pub fn get_active_windows() -> Vec<Window> {
+    let workspace_apps = regular_app_pids();
     let cg_windows = collect_cg_windows();
     let mut by_pid: HashMap<i32, Vec<CgWindow>> = HashMap::new();
     for window in cg_windows {
+        // CG surfaces from non-regular apps are never switchable targets.
+        if !workspace_apps.contains_key(&window.pid) {
+            continue;
+        }
         by_pid.entry(window.pid).or_default().push(window);
     }
 
-    let workspace_apps = regular_app_pids();
     for (pid, owner) in &workspace_apps {
+        if !is_switchable_owner_name(owner) {
+            continue;
+        }
         by_pid.entry(*pid).or_insert_with(Vec::new);
-        let _ = owner;
     }
 
     let profiles = load_browser_profiles();
@@ -439,12 +467,18 @@ pub fn get_active_windows() -> Vec<Window> {
     let mut window_list: Vec<Window> = Vec::new();
 
     for (pid, cg_windows) in by_pid.iter() {
+        let Some(app_name) = workspace_apps
+            .get(pid)
+            .cloned()
+            .or_else(|| cg_windows.first().map(|window| window.owner.clone()))
+        else {
+            continue;
+        };
+        if !is_switchable_owner_name(&app_name) {
+            continue;
+        }
+
         let app_element = AXUIElement::application(*pid);
-        let app_name = cg_windows
-            .first()
-            .map(|window| window.owner.clone())
-            .or_else(|| workspace_apps.get(pid).cloned())
-            .unwrap_or_else(|| format!("PID {pid}"));
 
         let enumerated_cg: Vec<EnumeratedCgWindow> = cg_windows
             .iter()
@@ -465,17 +499,16 @@ pub fn get_active_windows() -> Vec<Window> {
                 let Some(window_element) = ax_windows.get(i) else {
                     continue;
                 };
-                let title = ax_window_title(&window_element).unwrap_or_default();
-                let cg_window_id = ax_cg_window_id(&window_element);
-                let ax_index = ax_elements.len();
-                ax_elements.push(window_element.clone());
-                enumerated_ax.push(EnumeratedAxWindow {
-                    title,
-                    cg_window_id,
-                    ax_index,
-                });
+                push_ax_window(
+                    window_element,
+                    &mut ax_elements,
+                    &mut enumerated_ax,
+                );
             }
         }
+
+        // Do not synthesize AXMainWindow here: a single main row would make
+        // merge suppress sibling CG surfaces and collapse Chrome profiles.
 
         if is_chromium_family(&app_name) && !pid_profile_dirs.contains_key(pid) {
             pid_profile_dirs.insert(*pid, profile_directory_from_pid(*pid));

@@ -25,6 +25,8 @@ pub fn focus_window(window: &Window) -> Result<(), FocusError> {
             unminimize(&resolved);
             return raise_window(&resolved);
         }
+        // App came forward, but the selected CG surface was never raised.
+        // Fail so MRU does not promote a window that is not actually focused.
         eprintln!(
             "warning: no AX window for {} — {} (activated app only)",
             window.app_name, window.window_name
