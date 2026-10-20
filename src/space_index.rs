@@ -26,6 +26,22 @@ pub fn space_id_at_index(space_ids: &[u64], index: u8) -> Option<u64> {
     space_ids.get(idx).copied()
 }
 
+/// After a Mission Control Space switch, which MRU entry should own the menu bar?
+///
+/// `windows` is MRU-front-first; each item is `(onscreen, is_app_fallback)`.
+/// Prefers a real onscreen window so we can raise it; falls back to any
+/// onscreen row. Returns `None` when the destination Space looks empty —
+/// callers should activate Finder to refresh menu-bar ownership.
+pub fn preferred_space_focus_index(
+    windows: impl IntoIterator<Item = (bool, bool)>,
+) -> Option<usize> {
+    let windows: Vec<(bool, bool)> = windows.into_iter().collect();
+    windows
+        .iter()
+        .position(|(onscreen, is_fallback)| *onscreen && !*is_fallback)
+        .or_else(|| windows.iter().position(|(onscreen, _)| *onscreen))
+}
+
 /// Among per-display Space lists, pick the user-Space list for the display that
 /// owns `active_space_id` (including when that Space is fullscreen / non-user).
 /// Falls back to the first display that has any user Spaces.
@@ -43,7 +59,8 @@ pub fn select_display_spaces<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        select_display_spaces, space_id_at_index, workspace_index_for_digit, DisplaySpaces,
+        preferred_space_focus_index, select_display_spaces, space_id_at_index,
+        workspace_index_for_digit, DisplaySpaces,
     };
 
     fn display(membership: &[u64], user: &[u64]) -> DisplaySpaces {
@@ -110,5 +127,30 @@ mod tests {
     fn select_returns_none_when_no_display_has_user_spaces_or_membership() {
         let displays = vec![display(&[], &[]), display(&[], &[])];
         assert_eq!(select_display_spaces(&displays, 1), None);
+    }
+
+    #[test]
+    fn preferred_focus_picks_first_onscreen_real_window() {
+        // MRU: offscreen Ghostty, onscreen Chrome, onscreen fallback Zoom.
+        let windows = [(false, false), (true, false), (true, true)];
+        assert_eq!(preferred_space_focus_index(windows), Some(1));
+    }
+
+    #[test]
+    fn preferred_focus_falls_back_to_onscreen_app_fallback() {
+        let windows = [(false, false), (true, true)];
+        assert_eq!(preferred_space_focus_index(windows), Some(1));
+    }
+
+    #[test]
+    fn preferred_focus_none_when_space_has_no_onscreen_windows() {
+        let windows = [(false, false), (false, true)];
+        assert_eq!(preferred_space_focus_index(windows), None);
+    }
+
+    #[test]
+    fn preferred_focus_skips_offscreen_real_to_reach_onscreen() {
+        let windows = [(false, false), (false, false), (true, false)];
+        assert_eq!(preferred_space_focus_index(windows), Some(2));
     }
 }

@@ -26,7 +26,7 @@ mod window_tracker;
 #[cfg(target_os = "macos")]
 pub(crate) use window::window::Window;
 #[cfg(target_os = "macos")]
-use focus_window::focus_window;
+use focus_window::{activate_finder, focus_window};
 #[cfg(target_os = "macos")]
 use gesture::{GestureAction, GestureInput, GestureKey, GestureState};
 #[cfg(target_os = "macos")]
@@ -35,6 +35,8 @@ use overlay_window::OverlayWindow;
 use permissions::{ensure_accessibility_trust, print_permission_guidance};
 #[cfg(target_os = "macos")]
 use rdev::{Event, EventType, Key, grab};
+#[cfg(target_os = "macos")]
+use spaces::SpaceSwitch;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
@@ -199,9 +201,14 @@ fn main() {
                     }
 
                     match spaces::activate_space(index) {
-                        Ok(()) => {
-                            println!("[workspace] Switched to Space {index}");
-                            tracker.refresh_windows();
+                        Ok(SpaceSwitch::AlreadyActive) => {
+                            println!("[workspace] Already on Space {index}");
+                        }
+                        Ok(SpaceSwitch::Switched) => {
+                            // CGS changes the Space without activating an app on
+                            // the destination. Without a follow-up focus, the menu
+                            // bar keeps layered menus from the previous front app.
+                            refresh_menu_bar_after_space_switch(&mut tracker, index);
                         }
                         Err(error) => {
                             eprintln!("[workspace] Could not switch to Space {index}: {error}");
@@ -253,6 +260,56 @@ fn apply_focus_commit(tracker: &mut WindowTracker, focus_ok: bool) {
     match switch_commit_after_focus(focus_ok) {
         switch_commit::SwitchCommit::Finish => tracker.finish_switching(),
         switch_commit::SwitchCommit::Cancel => tracker.cancel_switching(),
+    }
+}
+
+/// Focus a window on the destination Space so the menu bar updates cleanly.
+///
+/// CG onscreen bits can lag the CGS switch slightly; retry once before treating
+/// the Space as empty and falling back to Finder.
+#[cfg(target_os = "macos")]
+fn refresh_menu_bar_after_space_switch(tracker: &mut WindowTracker, index: u8) {
+    const SETTLE: Duration = Duration::from_millis(50);
+
+    for _ in 0..2 {
+        thread::sleep(SETTLE);
+        tracker.refresh_windows();
+
+        let Some(window) = tracker.preferred_onscreen_window() else {
+            continue;
+        };
+
+        match focus_window(&window) {
+            Ok(()) => {
+                tracker.note_focused_after_space_switch(&window);
+                println!(
+                    "[workspace] Switched to Space {index} — focused {}",
+                    window.display_label()
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "[workspace] Switched to Space {index}, but focus failed for {}: {:?}",
+                    window.display_label(),
+                    error
+                );
+                // Still try Finder so the menu bar is not left layered.
+                break;
+            }
+        }
+    }
+
+    match activate_finder() {
+        Ok(()) => {
+            println!("[workspace] Switched to Space {index} — activated Finder (empty Space)");
+        }
+        Err(error) => {
+            eprintln!(
+                "[workspace] Switched to Space {index}, but could not refresh menu bar: {:?}",
+                error
+            );
+        }
     }
 }
 

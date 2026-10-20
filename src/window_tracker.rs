@@ -137,6 +137,24 @@ impl WindowTracker {
         self.refresh_windows_now();
     }
 
+    /// MRU-preferred window that is currently onscreen (for post–Space-switch focus).
+    pub fn preferred_onscreen_window(&self) -> Option<Window> {
+        let index = crate::space_index::preferred_space_focus_index(
+            self.mru_windows
+                .iter()
+                .map(|window| (window.onscreen, window.is_app_fallback)),
+        )?;
+        self.mru_windows.get(index).cloned()
+    }
+
+    /// Promote a window focused after a Space switch and pause MRU observation briefly.
+    pub fn note_focused_after_space_switch(&mut self, window: &Window) {
+        self.settle_target = Some((window.pid, window.cg_window_id, window.id.ax_ref));
+        self.settle_until = Some(Instant::now() + SETTLE_DURATION);
+        self.mru_windows
+            .observe_front_by(window.clone(), |known, focused| known.same_window(focused));
+    }
+
     fn refresh_windows_now(&mut self) {
         self.last_refresh = Instant::now();
         let fresh = get_active_windows();
