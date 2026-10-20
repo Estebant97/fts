@@ -108,10 +108,10 @@ fn match_cg_for_ax<'a>(
 /// Merge CG and AX windows for one application.
 ///
 /// Pairing prefers CG window ids from Accessibility, then title / empty-name
-/// matching. Unmatched CG rows become app-fallbacks only when
-/// [`should_emit_cg_fallback`] agrees — distinct titled surfaces beside a
-/// partial AX list (Ghostty terminals) are kept; denied owners, helper titles,
-/// and generic `owner == name` duplicates beside AX are dropped.
+/// matching. Unmatched CG rows become app-fallbacks only when AX listed
+/// nothing for the app ([`should_emit_cg_fallback`]): leftover CG titles
+/// beside a partial AX list are Ghostty tabs / helper chrome and are dropped.
+/// Denied owners and helper titles are rejected either way.
 pub fn merge_cg_and_ax(
     pid: i32,
     app_name: &str,
@@ -349,9 +349,9 @@ mod tests {
     }
 
     #[test]
-    fn partial_ax_keeps_distinct_titled_ghostty_cg_rows() {
-        // Motivating dump: one AX-matched Ghostty + several titled terminals
-        // that only appear in CGWindowList.
+    fn ghostty_tabs_beside_one_ax_window_are_dropped() {
+        // Real dump: one Ghostty OS window (AX) + CG rows for each tab title.
+        // Only the AX window is switchable; tabs have no AX and fail focus.
         let cg_windows = vec![
             cg_owned(10, "Ghostty", "fts"),
             cg_owned(11, "Ghostty", "Post yesterday’s growth pulse | tsindex"),
@@ -360,15 +360,30 @@ mod tests {
         let ax_windows = vec![ax(0, "fts", Some(10))];
 
         let merged = merge_cg_and_ax(9, "Ghostty", &cg_windows, &ax_windows);
-        assert_eq!(merged.len(), 3);
+        assert_eq!(merged.len(), 1);
         assert!(!merged[0].is_app_fallback);
         assert_eq!(merged[0].window_name, "fts");
-        assert!(merged[1].is_app_fallback);
-        assert!(merged[2].is_app_fallback);
-        assert_eq!(
-            merged[1].window_name,
-            "Post yesterday’s growth pulse | tsindex"
-        );
+        assert_eq!(merged[0].cg_window_id, Some(10));
+    }
+
+    #[test]
+    fn two_ghostty_ax_windows_stay_distinct() {
+        // Separate Ghostty windows (not tabs) each have their own AX row.
+        let cg_windows = vec![
+            cg_owned(10, "Ghostty", "fts"),
+            cg_owned(20, "Ghostty", "other-project"),
+            cg_owned(11, "Ghostty", "tab-only-title"),
+        ];
+        let ax_windows = vec![
+            ax(0, "fts", Some(10)),
+            ax(1, "other-project", Some(20)),
+        ];
+
+        let merged = merge_cg_and_ax(9, "Ghostty", &cg_windows, &ax_windows);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().all(|w| !w.is_app_fallback));
+        assert_eq!(merged[0].cg_window_id, Some(10));
+        assert_eq!(merged[1].cg_window_id, Some(20));
     }
 
     #[test]
