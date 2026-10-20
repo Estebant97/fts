@@ -8,6 +8,7 @@ pub struct MruList<T> {
     did_advance_selection: bool,
 }
 
+#[allow(dead_code)]
 impl<T> MruList<T> {
     pub fn new() -> Self {
         Self {
@@ -22,8 +23,24 @@ impl<T> MruList<T> {
         self.items.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn is_switching(&self) -> bool {
+        self.is_switching
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.items.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.items.iter_mut()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.items.get(index)
     }
 
     pub fn begin_switching(&mut self) {
@@ -38,6 +55,20 @@ impl<T> MruList<T> {
         }
 
         self.selected_index = (self.selected_index + 1) % self.items.len();
+        self.did_advance_selection = true;
+        self.items.get(self.selected_index)
+    }
+
+    pub fn reverse_selection(&mut self) -> Option<&T> {
+        if self.items.len() < 2 {
+            return None;
+        }
+
+        if self.selected_index == 0 {
+            self.selected_index = self.items.len() - 1;
+        } else {
+            self.selected_index -= 1;
+        }
         self.did_advance_selection = true;
         self.items.get(self.selected_index)
     }
@@ -65,6 +96,13 @@ impl<T> MruList<T> {
             self.items.push_front(item);
         }
 
+        self.selected_index = 0;
+    }
+
+    /// End a session without promoting the selection (Escape / dismiss).
+    pub fn cancel_switching(&mut self) {
+        self.is_switching = false;
+        self.did_advance_selection = false;
         self.selected_index = 0;
     }
 
@@ -111,6 +149,57 @@ impl<T> MruList<T> {
         }
 
         self.items.push_back(item);
+    }
+
+    pub fn retain_by<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let selected = self
+            .did_advance_selection
+            .then(|| self.items.get(self.selected_index).map(|_| self.selected_index))
+            .flatten();
+
+        let mut removed_before_selected = 0usize;
+        let mut idx = 0usize;
+        self.items.retain(|item| {
+            let keep_item = keep(item);
+            if !keep_item {
+                if let Some(selected_index) = selected {
+                    if idx < selected_index {
+                        removed_before_selected += 1;
+                    }
+                }
+            }
+            idx += 1;
+            keep_item
+        });
+
+        if self.items.is_empty() {
+            self.selected_index = 0;
+            self.did_advance_selection = false;
+            return;
+        }
+
+        if self.did_advance_selection {
+            let next = selected
+                .map(|index| index.saturating_sub(removed_before_selected))
+                .unwrap_or(0)
+                .min(self.items.len() - 1);
+            self.selected_index = next;
+        } else {
+            self.selected_index = self.selected_index.min(self.items.len() - 1);
+        }
+    }
+
+    pub fn update_matching_by<F, U>(&mut self, mut same_item: F, mut update: U)
+    where
+        F: FnMut(&T) -> bool,
+        U: FnMut(&mut T),
+    {
+        if let Some(item) = self.items.iter_mut().find(|item| same_item(item)) {
+            update(item);
+        }
     }
 }
 
@@ -187,5 +276,90 @@ mod tests {
         list.observe_front_by("zed-a", same_item);
 
         assert_eq!(list_items(&list), vec!["zed-b", "chrome", "zed-a"]);
+    }
+
+    #[test]
+    fn advance_wraps_around() {
+        let mut list = MruList::new();
+        list.push_back_unique_by("a", same_item);
+        list.push_back_unique_by("b", same_item);
+        list.push_back_unique_by("c", same_item);
+        list.begin_switching();
+
+        assert_eq!(list.advance_selection(), Some(&"b"));
+        assert_eq!(list.advance_selection(), Some(&"c"));
+        assert_eq!(list.advance_selection(), Some(&"a"));
+    }
+
+    #[test]
+    fn reverse_selects_last_from_front() {
+        let mut list = MruList::new();
+        list.push_back_unique_by("a", same_item);
+        list.push_back_unique_by("b", same_item);
+        list.push_back_unique_by("c", same_item);
+        list.begin_switching();
+
+        assert_eq!(list.reverse_selection(), Some(&"c"));
+        assert_eq!(list.selected_position(), Some(2));
+        assert_eq!(list.reverse_selection(), Some(&"b"));
+    }
+
+    #[test]
+    fn cancel_switching_does_not_promote() {
+        let mut list = MruList::new();
+        list.push_back_unique_by("a", same_item);
+        list.push_back_unique_by("b", same_item);
+        list.push_back_unique_by("c", same_item);
+        list.begin_switching();
+        list.advance_selection();
+        list.cancel_switching();
+
+        assert!(!list.is_switching());
+        assert_eq!(list.selected_item(), None);
+        assert_eq!(list_items(&list), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn finish_without_advance_leaves_order() {
+        let mut list = MruList::new();
+        list.push_back_unique_by("a", same_item);
+        list.push_back_unique_by("b", same_item);
+        list.begin_switching();
+        list.finish_switching();
+
+        assert_eq!(list_items(&list), vec!["a", "b"]);
+        assert!(!list.is_switching());
+    }
+
+    #[test]
+    fn single_window_cannot_advance() {
+        let mut list = MruList::new();
+        list.push_back_unique_by("only", same_item);
+        list.begin_switching();
+
+        assert_eq!(list.advance_selection(), None);
+        assert_eq!(list.reverse_selection(), None);
+        assert_eq!(list.selected_item(), None);
+    }
+
+    #[test]
+    fn unknown_focused_item_is_pushed_front() {
+        let mut list = MruList::new();
+        list.push_back_unique_by("a", same_item);
+        list.push_back_unique_by("b", same_item);
+        list.observe_front_by("new", same_item);
+
+        assert_eq!(list_items(&list), vec!["new", "a", "b"]);
+    }
+
+    #[test]
+    fn retain_removes_closed_windows() {
+        let mut list = MruList::new();
+        list.push_back_unique_by("a", same_item);
+        list.push_back_unique_by("b", same_item);
+        list.push_back_unique_by("c", same_item);
+        list.retain_by(|item| *item != "b");
+
+        assert_eq!(list_items(&list), vec!["a", "c"]);
     }
 }
