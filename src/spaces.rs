@@ -12,7 +12,7 @@ use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use std::fmt;
 
-use crate::space_index::{select_display_spaces, space_id_at_index};
+use crate::space_index::{select_display_spaces, space_id_at_index, DisplaySpaces};
 
 type CGSConnectionID = i32;
 type CGSSpaceID = u64;
@@ -95,9 +95,11 @@ fn set_current_space(cid: CGSConnectionID, space_id: CGSSpaceID) -> Result<(), S
     Ok(())
 }
 
-/// Returns one `Vec<space_id>` per managed display, in Mission Control order.
-/// Only user desktop Spaces are included (fullscreen/system Spaces skipped when typed).
-fn copy_user_spaces_per_display(cid: CGSConnectionID) -> Result<Vec<Vec<u64>>, SpaceError> {
+/// Returns per-display membership + user-Space lists in Mission Control order.
+///
+/// `membership_ids` keeps fullscreen/system Spaces so we can resolve which
+/// display owns the active Space; `user_ids` is what Option+N indexes.
+fn copy_user_spaces_per_display(cid: CGSConnectionID) -> Result<Vec<DisplaySpaces>, SpaceError> {
     let raw = unsafe { CGSCopyManagedDisplaySpaces(cid) };
     if raw.is_null() {
         return Err(SpaceError::CopyManagedDisplaySpacesFailed);
@@ -110,23 +112,31 @@ fn copy_user_spaces_per_display(cid: CGSConnectionID) -> Result<Vec<Vec<u64>>, S
 
     for dict in displays.iter() {
         let Some(spaces_array) = get_cf_array_of_dicts(&dict, &spaces_key) else {
-            result.push(Vec::new());
+            result.push(DisplaySpaces {
+                membership_ids: Vec::new(),
+                user_ids: Vec::new(),
+            });
             continue;
         };
 
-        let mut space_ids = Vec::new();
+        let mut membership_ids = Vec::new();
+        let mut user_ids = Vec::new();
         for space_dict in spaces_array.iter() {
-            if !is_user_space(&space_dict) {
+            let Some(id) = space_id_from_dict(&space_dict) else {
                 continue;
-            }
-            if let Some(id) = space_id_from_dict(&space_dict) {
-                space_ids.push(id);
+            };
+            membership_ids.push(id);
+            if is_user_space(&space_dict) {
+                user_ids.push(id);
             }
         }
-        result.push(space_ids);
+        result.push(DisplaySpaces {
+            membership_ids,
+            user_ids,
+        });
     }
 
-    if result.iter().all(|spaces| spaces.is_empty()) {
+    if result.iter().all(|display| display.user_ids.is_empty()) {
         return Err(SpaceError::NoSpacesFound);
     }
 

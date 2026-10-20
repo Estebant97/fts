@@ -44,7 +44,9 @@ pub struct GestureState {
     /// True after the first Space key-down until Space is released.
     /// Suppresses autorepeat KeyPress events while held.
     space_held: bool,
-    /// Digit currently held while Option is down (suppresses autorepeat).
+    /// Digit whose key-down we swallowed for an Option+digit chord.
+    /// Kept until that digit's key-up so a fast Option-up-before-digit-up
+    /// still swallows the matching release (and autorepeat).
     digit_held: Option<u8>,
 }
 
@@ -105,9 +107,13 @@ impl GestureState {
                 self.alt_gr = true;
                 (None, false)
             }
-            GestureKey::Digit(digit) if self.alt_down() => {
+            GestureKey::Digit(digit) => {
+                // Still holding a digit we already swallowed (Option may be up).
                 if self.digit_held == Some(digit) {
                     return (None, true);
+                }
+                if !self.alt_down() {
+                    return (None, false);
                 }
                 self.digit_held = Some(digit);
                 match crate::space_index::workspace_index_for_digit(digit) {
@@ -169,23 +175,20 @@ impl GestureState {
             }
             GestureKey::Alt => {
                 self.alt = false;
-                if !self.alt_down() {
-                    self.digit_held = None;
-                }
+                // Do not clear digit_held — the matching digit key-up must still
+                // be swallowed if Option is released first.
                 (None, false)
             }
             GestureKey::AltGr => {
                 self.alt_gr = false;
-                if !self.alt_down() {
-                    self.digit_held = None;
-                }
                 (None, false)
             }
             GestureKey::Digit(digit) => {
-                if self.digit_held == Some(digit) {
+                let was_swallowed = self.digit_held == Some(digit);
+                if was_swallowed {
                     self.digit_held = None;
                 }
-                let swallow = self.alt_down();
+                let swallow = was_swallowed || self.alt_down();
                 (None, swallow)
             }
             GestureKey::Space => {
@@ -373,5 +376,33 @@ mod tests {
 
         let (action, _) = state.handle(GestureInput::KeyPress(GestureKey::Digit(9)), false);
         assert_eq!(action, Some(GestureAction::GoToWorkspace { index: 9 }));
+    }
+
+    #[test]
+    fn option_up_before_digit_up_still_swallows_digit_release() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+        let _ = state.handle(GestureInput::KeyPress(GestureKey::Digit(3)), false);
+
+        // Fast chord: Option released while digit is still down.
+        let (action, swallow) = state.handle(GestureInput::KeyRelease(GestureKey::Alt), false);
+        assert_eq!(action, None);
+        assert!(!swallow);
+
+        let (action, swallow) = state.handle(GestureInput::KeyRelease(GestureKey::Digit(3)), false);
+        assert_eq!(action, None);
+        assert!(swallow);
+    }
+
+    #[test]
+    fn digit_autorepeat_after_option_up_stays_swallowed() {
+        let mut state = GestureState::default();
+        state.handle(GestureInput::KeyPress(GestureKey::Alt), false);
+        let _ = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), false);
+        let _ = state.handle(GestureInput::KeyRelease(GestureKey::Alt), false);
+
+        let (action, swallow) = state.handle(GestureInput::KeyPress(GestureKey::Digit(2)), false);
+        assert_eq!(action, None);
+        assert!(swallow);
     }
 }
