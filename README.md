@@ -4,6 +4,8 @@ A macOS most-recently-used (MRU) window switcher.
 
 Hold **Control**, tap **Space** to cycle through windows, **Shift+Space** to move backward, **Escape** to cancel, and release **Control** to focus the selected window.
 
+Hold **Option** and tap **1**–**9** to switch to that Mission Control Space on the focused display (similar to i3 / Hyprland / OmniWM workspace chords).
+
 ## Requirements
 
 - macOS
@@ -32,14 +34,19 @@ FTS_DISABLE_OVERLAY=1 cargo run --release
 - The switcher arms on the first **Ctrl+Space**, not on Control alone
 - Space (and Escape while switching) is consumed so it does not type into the front app
 - Left and right Control are tracked independently
-- The window list refreshes about once per second and again when a session starts
+- **Option+1…9** switches Mission Control Spaces; the digit is consumed while Option is held
+- Left and right Option both work; keypad digits map the same as the top row
+- If a Ctrl+Space session is open, Option+N cancels it before changing Space
+- Requesting a Space that does not exist is a no-op (logged)
+- Space switching uses private SkyLight / CGS APIs and may break on macOS updates
+- The window list refreshes about once per second, when a session starts, and after a Space change
 - After a successful focus, MRU updates pause briefly so the previous app cannot steal front again
 - The overlay lists nearby MRU entries on the display under the cursor
 
 ## Develop
 
 Pure logic (`mru_list`, `window_filter`, `window_enum`, `window_identity`,
-`browser_profile`, `focus_resolve`) is platform-free:
+`browser_profile`, `focus_resolve`, `gesture`, `space_index`) is platform-free:
 
 ```bash
 cargo test

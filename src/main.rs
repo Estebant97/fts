@@ -2,6 +2,7 @@ mod browser_profile;
 mod focus_resolve;
 mod gesture;
 mod mru_list;
+mod space_index;
 mod switch_commit;
 mod window_enum;
 mod window_filter;
@@ -15,6 +16,8 @@ mod focus_window;
 mod overlay_window;
 #[cfg(target_os = "macos")]
 mod permissions;
+#[cfg(target_os = "macos")]
+mod spaces;
 #[cfg(target_os = "macos")]
 mod window;
 #[cfg(target_os = "macos")]
@@ -50,6 +53,7 @@ use window_tracker::WindowTracker;
 #[cfg(target_os = "macos")]
 enum SwitcherEvent {
     SpacePressed { reverse: bool },
+    GoToWorkspace { index: u8 },
     Cancel,
     CtrlReleased,
 }
@@ -61,8 +65,20 @@ fn map_key(key: Key) -> GestureKey {
         Key::ControlRight => GestureKey::ControlRight,
         Key::ShiftLeft => GestureKey::ShiftLeft,
         Key::ShiftRight => GestureKey::ShiftRight,
+        Key::Alt => GestureKey::Alt,
+        Key::AltGr => GestureKey::AltGr,
         Key::Space => GestureKey::Space,
         Key::Escape => GestureKey::Escape,
+        Key::Num1 | Key::Kp1 => GestureKey::Digit(1),
+        Key::Num2 | Key::Kp2 => GestureKey::Digit(2),
+        Key::Num3 | Key::Kp3 => GestureKey::Digit(3),
+        Key::Num4 | Key::Kp4 => GestureKey::Digit(4),
+        Key::Num5 | Key::Kp5 => GestureKey::Digit(5),
+        Key::Num6 | Key::Kp6 => GestureKey::Digit(6),
+        Key::Num7 | Key::Kp7 => GestureKey::Digit(7),
+        Key::Num8 | Key::Kp8 => GestureKey::Digit(8),
+        Key::Num9 | Key::Kp9 => GestureKey::Digit(9),
+        Key::Num0 | Key::Kp0 => GestureKey::Digit(0),
         _ => GestureKey::Other,
     }
 }
@@ -87,6 +103,7 @@ fn main() {
     println!("Fast True Switcher");
     println!("  Hold Control, tap Space to cycle (Shift+Space reverse, Escape cancel).");
     println!("  Release Control to focus the selected window.");
+    println!("  Option+1…9 switches Mission Control Spaces on the focused display.");
     println!("  Tracking {} windows.\n", tracker.len());
 
     for (i, window) in tracker.windows().enumerate() {
@@ -122,6 +139,9 @@ fn main() {
             match action {
                 Some(GestureAction::SpacePressed { reverse }) => {
                     let _ = tx.send(SwitcherEvent::SpacePressed { reverse });
+                }
+                Some(GestureAction::GoToWorkspace { index }) => {
+                    let _ = tx.send(SwitcherEvent::GoToWorkspace { index });
                 }
                 Some(GestureAction::Cancel) => {
                     let _ = tx.send(SwitcherEvent::Cancel);
@@ -168,6 +188,24 @@ fn main() {
                         }
                     } else if tracker.len() < 2 {
                         println!("[switch] Need at least two windows to cycle");
+                    }
+                }
+                SwitcherEvent::GoToWorkspace { index } => {
+                    if tracker.is_switching() {
+                        println!("\n[switch] Cancelled (workspace change)\n");
+                        overlay.hide();
+                        tracker.cancel_switching();
+                        session_active.store(false, Ordering::SeqCst);
+                    }
+
+                    match spaces::activate_space(index) {
+                        Ok(()) => {
+                            println!("[workspace] Switched to Space {index}");
+                            tracker.refresh_windows();
+                        }
+                        Err(error) => {
+                            eprintln!("[workspace] Could not switch to Space {index}: {error}");
+                        }
                     }
                 }
                 SwitcherEvent::Cancel => {

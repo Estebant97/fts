@@ -39,7 +39,7 @@ pub fn print_permission_guidance(trusted: bool) {
          so window titles (and later thumbnails) from other apps are visible."
     );
     eprintln!(
-        "Input Monitoring: required for the global Ctrl+Space grab. If keys are ignored,\n  \
-         grant Input Monitoring to this process or its host Terminal."
+        "Input Monitoring: required for the global Ctrl+Space and Option+digit grab. If keys\n  \
+         are ignored, grant Input Monitoring to this process or its host Terminal."
     );
 }
