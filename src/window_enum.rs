@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 
 use crate::focus_resolve::UNTITLED_WINDOW_TITLE;
+use crate::window_filter::should_emit_cg_fallback;
 
 /// A layer-0/3 CGWindowList row after size/alpha filtering.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,13 +39,33 @@ pub struct MergedWindow {
     pub ax_index: Option<usize>,
 }
 
+/// Pair by title only when exactly one unmatched CG shares that title.
+/// Ambiguous same-title rows fail closed so Chrome profiles cannot cross-wire.
+fn unique_unmatched_cg_by_title<'a>(
+    title: &str,
+    cg_windows: &'a [EnumeratedCgWindow],
+    matched_cg_numbers: &HashSet<u32>,
+) -> Option<&'a EnumeratedCgWindow> {
+    let mut matches = cg_windows.iter().filter(|cg| {
+        !matched_cg_numbers.contains(&cg.window_number)
+            && !cg.name.is_empty()
+            && cg.name == title
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(first)
+    }
+}
+
 /// Find an unmatched CG row for this AX window.
 ///
 /// Prefer an exact CG window id. When that id was filtered out of the CG list
-/// (size/layer), fall through to title matching so the visible CG surface is
-/// consumed instead of becoming a phantom fallback. Empty-name CG pairing is
-/// only used when Accessibility did not report a CG id (Ghostty / no Screen
-/// Recording).
+/// (size/layer), fall through to a **unique** title match so Work/Personal
+/// Chrome windows with the same page title cannot steal each other's CG id.
+/// Empty-name CG pairing is only used when Accessibility did not report a CG
+/// id (Ghostty / no Screen Recording).
 fn match_cg_for_ax<'a>(
     ax: &EnumeratedAxWindow,
     title: &str,
@@ -60,16 +81,16 @@ fn match_cg_for_ax<'a>(
         {
             return Some(cg);
         }
-        // Id missing from the filtered CG list — try title before giving up.
+        // Id missing from the filtered CG list — unique title only.
         if !title.is_empty() && title != UNTITLED_WINDOW_TITLE {
-            return cg_windows
-                .iter()
-                .find(|cg| unmatched(cg) && !cg.name.is_empty() && cg.name == title);
+            return unique_unmatched_cg_by_title(title, cg_windows, matched_cg_numbers);
         }
         return None;
     }
 
     if !title.is_empty() && title != UNTITLED_WINDOW_TITLE {
+        // No AX cg id: consume the first title match so N AX rows can pair
+        // with N same-titled CG rows sequentially.
         if let Some(cg) = cg_windows
             .iter()
             .find(|cg| unmatched(cg) && !cg.name.is_empty() && cg.name == title)
@@ -87,11 +108,10 @@ fn match_cg_for_ax<'a>(
 /// Merge CG and AX windows for one application.
 ///
 /// Pairing prefers CG window ids from Accessibility, then title / empty-name
-/// matching. CG-only app-fallback rows are emitted **only when AX lists no
-/// windows** (e.g. Ghostty when Accessibility cannot see its surfaces). When
-/// AX has any windows, unmatched CG rows are dropped — they are almost always
-/// helper panels (Zoom share sheets, AutoFill, permission dialogs) that cannot
-/// be raised and break the switcher.
+/// matching. Unmatched CG rows become app-fallbacks only when
+/// [`should_emit_cg_fallback`] agrees — distinct titled surfaces beside a
+/// partial AX list (Ghostty terminals) are kept; denied owners, helper titles,
+/// and generic `owner == name` duplicates beside AX are dropped.
 pub fn merge_cg_and_ax(
     pid: i32,
     app_name: &str,
@@ -101,6 +121,7 @@ pub fn merge_cg_and_ax(
     let mut matched_cg_numbers = HashSet::new();
     let mut emitted_cg_ids = HashSet::new();
     let mut window_list = Vec::new();
+    let mut ax_titles: HashSet<String> = HashSet::new();
 
     for ax in ax_windows {
         let title = if ax.title.is_empty() {
@@ -128,6 +149,7 @@ pub fn merge_cg_and_ax(
             }
         }
 
+        ax_titles.insert(title.clone());
         window_list.push(MergedWindow {
             pid,
             cg_window_id,
@@ -139,32 +161,35 @@ pub fn merge_cg_and_ax(
         });
     }
 
-    // Only invent CG-only rows when Accessibility saw nothing for this app.
-    if ax_windows.is_empty() {
-        for cg in cg_windows {
-            if matched_cg_numbers.contains(&cg.window_number) {
-                continue;
-            }
-            if !emitted_cg_ids.insert(cg.window_number) {
-                continue;
-            }
+    let ax_has_windows = !ax_windows.is_empty();
+    let ax_title_refs: HashSet<&str> = ax_titles.iter().map(String::as_str).collect();
 
-            let window_name = if cg.name.is_empty() {
-                app_name.to_string()
-            } else {
-                cg.name.clone()
-            };
-
-            window_list.push(MergedWindow {
-                pid,
-                cg_window_id: Some(cg.window_number),
-                app_name: cg.owner.clone(),
-                window_name,
-                onscreen: cg.onscreen,
-                is_app_fallback: true,
-                ax_index: None,
-            });
+    for cg in cg_windows {
+        if matched_cg_numbers.contains(&cg.window_number) {
+            continue;
         }
+        if !emitted_cg_ids.insert(cg.window_number) {
+            continue;
+        }
+        if !should_emit_cg_fallback(&cg.owner, &cg.name, &ax_title_refs, ax_has_windows) {
+            continue;
+        }
+
+        let window_name = if cg.name.is_empty() {
+            app_name.to_string()
+        } else {
+            cg.name.clone()
+        };
+
+        window_list.push(MergedWindow {
+            pid,
+            cg_window_id: Some(cg.window_number),
+            app_name: cg.owner.clone(),
+            window_name,
+            onscreen: cg.onscreen,
+            is_app_fallback: true,
+            ax_index: None,
+        });
     }
 
     window_list
@@ -180,6 +205,16 @@ mod tests {
         EnumeratedCgWindow {
             pid: 42,
             owner: "Google Chrome".into(),
+            name: name.into(),
+            onscreen: true,
+            window_number: number,
+        }
+    }
+
+    fn cg_owned(number: u32, owner: &str, name: &str) -> EnumeratedCgWindow {
+        EnumeratedCgWindow {
+            pid: 42,
+            owner: owner.into(),
             name: name.into(),
             onscreen: true,
             window_number: number,
@@ -294,13 +329,16 @@ mod tests {
     }
 
     #[test]
-    fn unmatched_cg_helpers_dropped_when_ax_has_windows() {
-        // Zoom-style noise: real meeting window in AX, plus CG-only panels.
+    fn helper_cg_titles_dropped_beside_ax_meeting() {
         let cg_windows = vec![
-            cg(100, "Zoom Meeting"),
-            cg(101, "Breakout rooms"),
-            cg(102, "Select a window or an application that you want to share"),
-            cg(103, "Zoom Client Healthcheck"),
+            cg_owned(100, "Zoom", "Zoom Meeting"),
+            cg_owned(101, "Zoom", "Zoom"),
+            cg_owned(
+                102,
+                "Zoom",
+                "Select a window or an application that you want to share",
+            ),
+            cg_owned(103, "Zoom", "Zoom Client Healthcheck"),
         ];
         let ax_windows = vec![ax(0, "Zoom Meeting", Some(100))];
 
@@ -308,12 +346,33 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].window_name, "Zoom Meeting");
         assert!(!merged[0].is_app_fallback);
-        assert!(merged.iter().all(|w| !w.is_app_fallback));
     }
 
     #[test]
-    fn ax_id_miss_pairs_by_title_instead_of_emitting_fallback() {
-        // AX reports a filtered-out CG id; the visible CG row shares the title.
+    fn partial_ax_keeps_distinct_titled_ghostty_cg_rows() {
+        // Motivating dump: one AX-matched Ghostty + several titled terminals
+        // that only appear in CGWindowList.
+        let cg_windows = vec![
+            cg_owned(10, "Ghostty", "fts"),
+            cg_owned(11, "Ghostty", "Post yesterday’s growth pulse | tsindex"),
+            cg_owned(12, "Ghostty", "etorres@host:~/dev/my-lz"),
+        ];
+        let ax_windows = vec![ax(0, "fts", Some(10))];
+
+        let merged = merge_cg_and_ax(9, "Ghostty", &cg_windows, &ax_windows);
+        assert_eq!(merged.len(), 3);
+        assert!(!merged[0].is_app_fallback);
+        assert_eq!(merged[0].window_name, "fts");
+        assert!(merged[1].is_app_fallback);
+        assert!(merged[2].is_app_fallback);
+        assert_eq!(
+            merged[1].window_name,
+            "Post yesterday’s growth pulse | tsindex"
+        );
+    }
+
+    #[test]
+    fn ax_id_miss_pairs_by_unique_title() {
         let cg_windows = vec![cg(50, "Inbox - Gmail")];
         let ax_windows = vec![ax(0, "Inbox - Gmail", Some(999))];
 
@@ -324,10 +383,29 @@ mod tests {
     }
 
     #[test]
-    fn autofill_style_cg_only_app_still_emits_when_ax_empty() {
-        let cg_windows = vec![cg(1, "AutoFill")];
+    fn ax_id_miss_same_title_fails_closed_without_cross_wiring() {
+        // Two Chrome profiles, same page title, both AX ids missing from CG.
+        // Must not bind Work AX to Personal CG (or vice versa).
+        let cg_windows = vec![cg(10, "Inbox"), cg(11, "Inbox")];
+        let ax_windows = vec![ax(0, "Inbox", Some(100)), ax(1, "Inbox", Some(101))];
+
+        let merged = merge_cg_and_ax(42, "Google Chrome", &cg_windows, &ax_windows);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].cg_window_id, Some(100));
+        assert_eq!(merged[1].cg_window_id, Some(101));
+        assert!(!merged[0].is_app_fallback);
+        assert!(!merged[1].is_app_fallback);
+        // Ambiguous CG rows must not appear as extra fallbacks either.
+        assert!(merged.iter().all(|w| !w.is_app_fallback));
+    }
+
+    #[test]
+    fn autofill_owner_never_emits_cg_fallback() {
+        let cg_windows = vec![cg_owned(1, "AutoFill", "AutoFill")];
         let merged = merge_cg_and_ax(2, "AutoFill", &cg_windows, &[]);
-        assert_eq!(merged.len(), 1);
-        assert!(merged[0].is_app_fallback);
+        assert!(
+            merged.is_empty(),
+            "denied owners must be rejected at merge, not only at CG collect"
+        );
     }
 }

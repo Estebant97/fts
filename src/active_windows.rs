@@ -507,15 +507,8 @@ pub fn get_active_windows() -> Vec<Window> {
             }
         }
 
-        // Some apps (Electron helpers, Zoom) report no AXWindows but still
-        // expose a main window. Prefer that over flooding the switcher with
-        // unfocusable CG-only surfaces.
-        if enumerated_ax.is_empty() {
-            let main_attr = AXAttribute::new(&CFString::new("AXMainWindow"));
-            if let Ok(main) = app_element.attribute::<AXUIElement>(&main_attr) {
-                push_ax_window(main, &mut ax_elements, &mut enumerated_ax);
-            }
-        }
+        // Do not synthesize AXMainWindow here: a single main row would make
+        // merge suppress sibling CG surfaces and collapse Chrome profiles.
 
         if is_chromium_family(&app_name) && !pid_profile_dirs.contains_key(pid) {
             pid_profile_dirs.insert(*pid, profile_directory_from_pid(*pid));
