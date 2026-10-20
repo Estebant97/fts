@@ -38,6 +38,9 @@ use rdev::{Event, EventType, Key, grab};
 #[cfg(target_os = "macos")]
 use spaces::SpaceSwitch;
 #[cfg(target_os = "macos")]
+#[cfg(target_os = "macos")]
+use std::collections::HashSet;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc::channel;
@@ -50,7 +53,7 @@ use std::time::Duration;
 #[cfg(target_os = "macos")]
 use switch_commit::switch_commit_after_focus;
 #[cfg(target_os = "macos")]
-use window_tracker::WindowTracker;
+use window_tracker::{OnscreenWindowKey, WindowTracker};
 
 #[cfg(target_os = "macos")]
 enum SwitcherEvent {
@@ -200,6 +203,11 @@ fn main() {
                         session_active.store(false, Ordering::SeqCst);
                     }
 
+                    // Snapshot before CGS flips Spaces so we never refocus a
+                    // window that is only still "onscreen" due to CG lag.
+                    tracker.refresh_windows();
+                    let previously_onscreen = tracker.onscreen_window_keys();
+
                     match spaces::activate_space(index) {
                         Ok(SpaceSwitch::AlreadyActive) => {
                             println!("[workspace] Already on Space {index}");
@@ -208,7 +216,11 @@ fn main() {
                             // CGS changes the Space without activating an app on
                             // the destination. Without a follow-up focus, the menu
                             // bar keeps layered menus from the previous front app.
-                            refresh_menu_bar_after_space_switch(&mut tracker, index);
+                            refresh_menu_bar_after_space_switch(
+                                &mut tracker,
+                                index,
+                                &previously_onscreen,
+                            );
                         }
                         Err(error) => {
                             eprintln!("[workspace] Could not switch to Space {index}: {error}");
@@ -265,17 +277,24 @@ fn apply_focus_commit(tracker: &mut WindowTracker, focus_ok: bool) {
 
 /// Focus a window on the destination Space so the menu bar updates cleanly.
 ///
-/// CG onscreen bits can lag the CGS switch slightly; retry once before treating
-/// the Space as empty and falling back to Finder.
+/// CG onscreen bits can lag the CGS switch. We never focus a window that was
+/// already onscreen before the switch until inventory settles (previous windows
+/// leave and/or new ones appear); otherwise Option+N would bounce back.
 #[cfg(target_os = "macos")]
-fn refresh_menu_bar_after_space_switch(tracker: &mut WindowTracker, index: u8) {
+fn refresh_menu_bar_after_space_switch(
+    tracker: &mut WindowTracker,
+    index: u8,
+    previously_onscreen: &HashSet<OnscreenWindowKey>,
+) {
     const SETTLE: Duration = Duration::from_millis(50);
 
-    for _ in 0..2 {
+    for _ in 0..4 {
         thread::sleep(SETTLE);
         tracker.refresh_windows();
 
-        let Some(window) = tracker.preferred_onscreen_window() else {
+        let Some(window) =
+            tracker.preferred_onscreen_window_after_space_switch(previously_onscreen)
+        else {
             continue;
         };
 
