@@ -52,7 +52,9 @@ rows and NSWorkspace pid discovery. Chrome work/personal profiles stay distinct
 by CG window id and show as `Google Chrome · Work — …` in the overlay.
 
 Only regular apps are switchable. Denied owners (AutoFill, loginwindow, Wi-Fi,
-…) are filtered at collect and again at merge. Unmatched CG rows beside a
-partial AX list are kept when their titles are distinct (Ghostty terminals);
-generic `App — App` copies and known helper titles (share pickers, healthcheck)
-are dropped. Activate-only focus still fails closed so MRU is not promoted.
+…) are filtered at collect and again at merge. When Accessibility already lists
+windows for an app, unmatched CG rows are dropped — Ghostty tabs and helper
+chrome share CG titles but are not separate OS windows. CG fallbacks are only
+emitted when AX is empty (so Ghostty still appears without Screen Recording).
+Known helper titles (share pickers, healthcheck) are dropped either way.
+Activate-only focus still fails closed so MRU is not promoted.

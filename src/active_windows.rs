@@ -508,8 +508,14 @@ pub fn get_active_windows() -> Vec<Window> {
             }
         }
 
-        // Do not synthesize AXMainWindow here: a single main row would make
-        // merge suppress sibling CG surfaces and collapse Chrome profiles.
+        // When AXWindows is empty, try AXMainWindow for non-Chromium apps so
+        // Zoom / similar can still be raised. Never do this for Chromium:
+        // a single main row would suppress sibling CG profile windows.
+        if enumerated_ax.is_empty() && !is_chromium_family(&app_name) {
+            if let Ok(main_window) = app_element.attribute(&AXAttribute::main_window()) {
+                push_ax_window(main_window, &mut ax_elements, &mut enumerated_ax);
+            }
+        }
 
         if is_chromium_family(&app_name) && !pid_profile_dirs.contains_key(pid) {
             pid_profile_dirs.insert(*pid, profile_directory_from_pid(*pid));

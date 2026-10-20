@@ -92,11 +92,14 @@ pub fn is_helper_window_title(title: &str) -> bool {
 ///
 /// - Denied owners never emit (merge-level backstop for the CG collector).
 /// - Helper title needles never emit.
-/// - When AX already listed windows: keep only distinct non-empty titles that
-///   are not already represented and are not a generic `owner == name` copy.
-///   Empty-name CG rows are assumed pairable with AX and are not re-emitted.
+/// - When AX already listed windows: never emit. Accessibility reports real
+///   OS windows; leftover CG surfaces are tabs (Ghostty) or helper chrome
+///   (Zoom share sheets). Emitting them made the switcher list every Ghostty
+///   tab and then fail focus with `AppFallback` because tabs have no AX
+///   window. Separate Ghostty / Chrome windows each appear as their own AX
+///   row.
 /// - When AX is empty: keep CG rows (including empty names renamed to owner)
-///   so Ghostty still appears.
+///   so Ghostty still appears without Accessibility / Screen Recording.
 pub fn should_emit_cg_fallback(
     owner: &str,
     cg_name: &str,
@@ -111,18 +114,12 @@ pub fn should_emit_cg_fallback(
         return false;
     }
 
+    // `ax_titles` is retained in the signature so callers can keep collecting
+    // titles for logging / future heuristics without another API break.
+    let _ = ax_titles;
+
     if ax_has_windows {
-        if cg_name.is_empty() {
-            return false;
-        }
-        if ax_titles.contains(cg_name) {
-            return false;
-        }
-        // Generic "Zoom — Zoom" surface beside a real AX window.
-        if cg_name == owner {
-            return false;
-        }
-        return true;
+        return false;
     }
 
     true
@@ -210,9 +207,11 @@ mod tests {
     }
 
     #[test]
-    fn cg_fallback_keeps_distinct_titles_beside_ax() {
+    fn cg_fallback_drops_all_rows_beside_ax() {
+        // Ghostty tabs show up as distinct CG titles next to one AX window.
+        // They must not become switcher entries (no AX → AppFallback on focus).
         let ax_titles: HashSet<&str> = ["fts"].into_iter().collect();
-        assert!(should_emit_cg_fallback(
+        assert!(!should_emit_cg_fallback(
             "Ghostty",
             "Post yesterday’s growth pulse",
             &ax_titles,
@@ -221,6 +220,12 @@ mod tests {
         assert!(!should_emit_cg_fallback("Ghostty", "fts", &ax_titles, true));
         assert!(!should_emit_cg_fallback("Ghostty", "Ghostty", &ax_titles, true));
         assert!(!should_emit_cg_fallback("Ghostty", "", &ax_titles, true));
+        assert!(!should_emit_cg_fallback(
+            "Zoom",
+            "Select a window or an application that you want to share",
+            &ax_titles,
+            true
+        ));
     }
 
     #[test]
