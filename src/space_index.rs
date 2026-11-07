@@ -26,53 +26,11 @@ pub fn space_id_at_index(space_ids: &[u64], index: u8) -> Option<u64> {
     space_ids.get(idx).copied()
 }
 
-/// One MRU row considered for post–Space-switch menu-bar focus.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpaceFocusCandidate {
-    pub onscreen: bool,
-    pub is_app_fallback: bool,
-    /// True if this window was onscreen *before* the CGS Space switch.
-    /// While CG lags, previous-Space windows can still look onscreen — those
-    /// must not be focused or Option+N bounces back.
-    pub was_onscreen_before_switch: bool,
-}
-
-/// True once CG inventory reflects the Space change: a prior onscreen window
-/// went offscreen, and/or a window that was offscreen is now onscreen.
-pub fn space_inventory_settled(candidates: &[SpaceFocusCandidate]) -> bool {
-    candidates
-        .iter()
-        .any(|c| c.was_onscreen_before_switch && !c.onscreen)
-        || candidates
-            .iter()
-            .any(|c| c.onscreen && !c.was_onscreen_before_switch)
-}
-
-/// After a Mission Control Space switch, which MRU entry should own the menu bar?
-///
-/// Returns `None` while CG onscreen bits are still stale (would refocus the
-/// previous Space), or when the destination Space has no onscreen windows —
-/// callers should retry then activate Finder.
-pub fn preferred_space_focus_index(candidates: &[SpaceFocusCandidate]) -> Option<usize> {
-    if !space_inventory_settled(candidates) {
-        return None;
-    }
-
-    candidates
-        .iter()
-        .position(|c| c.onscreen && !c.is_app_fallback && !c.was_onscreen_before_switch)
-        .or_else(|| {
-            candidates
-                .iter()
-                .position(|c| c.onscreen && !c.was_onscreen_before_switch)
-        })
-        // Inventory settled but only sticky / all-Spaces windows remain visible.
-        .or_else(|| {
-            candidates
-                .iter()
-                .position(|c| c.onscreen && !c.is_app_fallback)
-        })
-        .or_else(|| candidates.iter().position(|c| c.onscreen))
+/// Mission Control includes fullscreen Spaces in its thumbnail list, even though
+/// Option+N counts only user desktops. Return a zero-based thumbnail index.
+pub fn mission_control_index(display: &DisplaySpaces, index: u8) -> Option<usize> {
+    let target = space_id_at_index(&display.user_ids, index)?;
+    display.membership_ids.iter().position(|id| *id == target)
 }
 
 /// Among per-display Space lists, pick the user-Space list for the display that
@@ -92,17 +50,8 @@ pub fn select_display_spaces<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        preferred_space_focus_index, select_display_spaces, space_id_at_index,
-        space_inventory_settled, workspace_index_for_digit, DisplaySpaces, SpaceFocusCandidate,
+        DisplaySpaces, select_display_spaces, space_id_at_index, workspace_index_for_digit,
     };
-
-    fn cand(onscreen: bool, is_app_fallback: bool, was_onscreen_before_switch: bool) -> SpaceFocusCandidate {
-        SpaceFocusCandidate {
-            onscreen,
-            is_app_fallback,
-            was_onscreen_before_switch,
-        }
-    }
 
     fn display(membership: &[u64], user: &[u64]) -> DisplaySpaces {
         DisplaySpaces {
@@ -133,11 +82,26 @@ mod tests {
     }
 
     #[test]
+    fn mission_control_index_accounts_for_interleaved_fullscreen_spaces() {
+        let d = display(&[99, 10, 100, 20, 30], &[10, 20, 30]);
+        assert_eq!(super::mission_control_index(&d, 1), Some(1));
+        assert_eq!(super::mission_control_index(&d, 2), Some(3));
+        assert_eq!(super::mission_control_index(&d, 3), Some(4));
+        assert_eq!(super::mission_control_index(&d, 0), None);
+        assert_eq!(super::mission_control_index(&d, 4), None);
+    }
+
+    #[test]
+    fn missing_thumbnail_fails_closed() {
+        assert_eq!(
+            super::mission_control_index(&display(&[10], &[20]), 1),
+            None
+        );
+    }
+
+    #[test]
     fn select_prefers_display_containing_active_space() {
-        let displays = vec![
-            display(&[1, 2], &[1, 2]),
-            display(&[3, 4, 5], &[3, 4, 5]),
-        ];
+        let displays = vec![display(&[1, 2], &[1, 2]), display(&[3, 4, 5], &[3, 4, 5])];
         assert_eq!(select_display_spaces(&displays, 4), Some(&[3u64, 4, 5][..]));
     }
 
@@ -145,10 +109,7 @@ mod tests {
     fn select_uses_membership_when_active_is_fullscreen() {
         // Display 0: user desktops 1,2 plus fullscreen 99 currently active.
         // Display 1: user desktops 3,4 — must not steal focus via fallback.
-        let displays = vec![
-            display(&[1, 2, 99], &[1, 2]),
-            display(&[3, 4], &[3, 4]),
-        ];
+        let displays = vec![display(&[1, 2, 99], &[1, 2]), display(&[3, 4], &[3, 4])];
         assert_eq!(select_display_spaces(&displays, 99), Some(&[1u64, 2][..]));
     }
 
@@ -168,59 +129,5 @@ mod tests {
     fn select_returns_none_when_no_display_has_user_spaces_or_membership() {
         let displays = vec![display(&[], &[]), display(&[], &[])];
         assert_eq!(select_display_spaces(&displays, 1), None);
-    }
-
-    #[test]
-    fn preferred_focus_picks_newly_visible_real_window() {
-        // Previous Ghostty still listed; destination Chrome newly onscreen.
-        let windows = [
-            cand(false, false, true),
-            cand(true, false, false),
-            cand(true, true, false),
-        ];
-        assert!(space_inventory_settled(&windows));
-        assert_eq!(preferred_space_focus_index(&windows), Some(1));
-    }
-
-    #[test]
-    fn preferred_focus_falls_back_to_newly_visible_app_fallback() {
-        let windows = [cand(false, false, true), cand(true, true, false)];
-        assert_eq!(preferred_space_focus_index(&windows), Some(1));
-    }
-
-    #[test]
-    fn preferred_focus_none_when_destination_empty_after_settle() {
-        // Previous windows went offscreen; nothing new appeared.
-        let windows = [cand(false, false, true), cand(false, true, true)];
-        assert!(space_inventory_settled(&windows));
-        assert_eq!(preferred_space_focus_index(&windows), None);
-    }
-
-    #[test]
-    fn preferred_focus_skips_stale_previous_space_while_cg_lags() {
-        // CGS switched, but CG still reports the old front window onscreen and
-        // the destination window has not flipped on yet — must not focus.
-        let windows = [cand(true, false, true), cand(false, false, false)];
-        assert!(!space_inventory_settled(&windows));
-        assert_eq!(preferred_space_focus_index(&windows), None);
-    }
-
-    #[test]
-    fn preferred_focus_allows_sticky_after_previous_windows_leave() {
-        let windows = [
-            cand(false, false, true), // left with the old Space
-            cand(true, false, true),  // sticky / all-Spaces
-        ];
-        assert!(space_inventory_settled(&windows));
-        assert_eq!(preferred_space_focus_index(&windows), Some(1));
-    }
-
-    #[test]
-    fn preferred_focus_prefers_newly_visible_over_sticky() {
-        let windows = [
-            cand(true, false, true),  // sticky
-            cand(true, false, false), // newly visible on destination
-        ];
-        assert_eq!(preferred_space_focus_index(&windows), Some(1));
     }
 }

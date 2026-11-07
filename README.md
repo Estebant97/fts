@@ -38,8 +38,9 @@ FTS_DISABLE_OVERLAY=1 cargo run --release
 - Left and right Option both work; keypad digits map the same as the top row
 - If a Ctrl+Space session is open, Option+N cancels it before changing Space
 - Requesting a Space that does not exist is a no-op (logged)
-- After a Space switch, the MRU onscreen window is focused (or Finder on an empty Space) so the menu bar updates instead of layering previous app menus
-- Space switching uses private SkyLight / CGS APIs and may break on macOS updates
+- Space switches use Mission Control’s desktop buttons so Dock updates windows, focus, and the menu bar together; the overview briefly appears during a switch
+- A switch is reported successful only after the destination display confirms its current Space
+- Space discovery uses private SkyLight / CGS APIs and switching uses Mission Control Accessibility elements (Dock on older macOS, WindowManager on macOS 27+); these may change on macOS updates
 - The window list refreshes about once per second, when a session starts, and after a Space change
 - After a successful focus, MRU updates pause briefly so the previous app cannot steal front again
 - The overlay lists nearby MRU entries on the display under the cursor
@@ -47,7 +48,8 @@ FTS_DISABLE_OVERLAY=1 cargo run --release
 ## Develop
 
 Pure logic (`mru_list`, `window_filter`, `window_enum`, `window_identity`,
-`browser_profile`, `focus_resolve`, `gesture`, `space_index`) is platform-free:
+`browser_profile`, `focus_resolve`, `gesture`, `space_index`, `space_switch`,
+`mission_control`) is platform-free:
 
 ```bash
 cargo test
@@ -66,3 +68,20 @@ chrome share CG titles but are not separate OS windows. CG fallbacks are only
 emitted when AX is empty (so Ghostty still appears without Screen Recording).
 Known helper titles (share pickers, healthcheck) are dropped either way.
 Activate-only focus still fails closed so MRU is not promoted.
+
+To exercise real desktop transitions on an unlocked Mac with Accessibility
+permission and at least two user desktops on the focused display:
+
+```bash
+cargo test live_desktop_round_trip -- --ignored --nocapture
+```
+
+This opt-in test visits each other desktop reachable with Option+1–9 and returns
+three times, checks repeated requests and source-window visibility, and attempts
+to restore the initial desktop even on failure. Also check visually
+that each desktop shows only its own windows and the menu bar belongs to its
+focused app. Ordinary unit tests do not manipulate the desktop.
+
+For optional screenshots of each destination, grant Screen Recording access and
+run `FTS_TEST_SCREENSHOTS=1 cargo test live_desktop_round_trip -- --ignored --nocapture`.
+Images are written to `/tmp/fts-space-N.png`.
