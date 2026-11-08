@@ -119,4 +119,19 @@ mod tests {
         assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::AlreadyActive));
         assert_eq!((t.presses, t.waits), (2, 3));
     }
+
+    #[test]
+    fn repeating_completed_request_does_not_press_again() {
+        let mut t = Fake::new(&[Ok(false), Ok(true), Ok(true)]);
+        assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::Switched));
+        assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::AlreadyActive));
+        assert_eq!((t.presses, t.waits), (1, 1));
+    }
+
+    #[test]
+    fn destination_read_failure_does_not_press_again() {
+        let mut t = Fake::new(&[Ok(false), Err("display disconnected")]);
+        assert_eq!(switch_space(&mut t), Err("display disconnected"));
+        assert_eq!((t.presses, t.waits), (1, 1));
+    }
 }

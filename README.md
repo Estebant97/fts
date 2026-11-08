@@ -85,3 +85,16 @@ focused app. Ordinary unit tests do not manipulate the desktop.
 For optional screenshots of each destination, grant Screen Recording access and
 run `FTS_TEST_SCREENSHOTS=1 cargo test live_desktop_round_trip -- --ignored --nocapture`.
 Images are written to `/tmp/fts-space-N.png`.
+
+To check the production switch path on the main thread, pass destination desktop
+numbers and end with the starting desktop (repeat a number to check a no-op):
+
+```bash
+cargo run --example verify_workspace_transition -- 2 2 3 1
+```
+
+The example attempts to return to the last desktop number if a request fails.
+Run it on an unlocked Mac with Accessibility access. Screen Recording is needed
+only for optional captures: set `FTS_TEST_SCREENSHOTS=1` to save them in
+`/tmp/fts-space-N.png`. Check the windows and menu bar visually as well as the
+reported result; destination confirmation alone does not verify rendering.

@@ -375,6 +375,29 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    // Live tests cannot exercise desktop transitions while the session is locked.
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGSessionCopyCurrentDictionary() -> core_foundation::dictionary::CFDictionaryRef;
+    }
+    fn session_is_unlocked() -> bool {
+        use core_foundation::{base::CFType, boolean::CFBoolean};
+        let raw = unsafe { CGSessionCopyCurrentDictionary() };
+        if raw.is_null() {
+            return false;
+        }
+        let dict = unsafe { CFDictionary::<CFTypeRef, CFTypeRef>::wrap_under_create_rule(raw) };
+        let key = CFString::from_static_string("CGSSessionScreenIsLocked");
+        let Some(raw) = dict.find(key.as_CFTypeRef()) else {
+            return true;
+        };
+        let value = unsafe { CFType::wrap_under_get_rule(*raw) };
+        if let Some(value) = value.downcast::<CFBoolean>() {
+            return !bool::from(value);
+        }
+        value.downcast::<CFNumber>().and_then(|v| v.to_i64()) == Some(0)
+    }
+
     #[link(name = "SkyLight", kind = "framework")]
     unsafe extern "C" {
         fn SLSCopySpacesForWindows(
@@ -442,6 +465,10 @@ mod tests {
     #[ignore = "changes real desktops; requires an unlocked Mac with Accessibility permission"]
     fn live_desktop_round_trip() {
         assert!(
+            session_is_unlocked(),
+            "unlock the Mac before running the live desktop test"
+        );
+        assert!(
             crate::permissions::ensure_accessibility_trust(false),
             "Accessibility permission is required for the live desktop test"
         );
@@ -472,6 +499,9 @@ mod tests {
                 }
             }
         }
+        let raw_display = unsafe { CGSCopyManagedDisplayForSpace(cid, original) };
+        assert!(!raw_display.is_null(), "resolve starting display");
+        let test_display = unsafe { CFString::wrap_under_create_rule(raw_display as *const _) };
         let _restore = Restore(original_index);
         for round in 0..3 {
             for destination in 1..=spaces.len().min(9) as u8 {
@@ -480,8 +510,21 @@ mod tests {
                 }
                 let destination_id = spaces[usize::from(destination - 1)];
                 let source_windows = windows_exclusive_to_source(cid, original, destination_id);
+                let started = std::time::Instant::now();
                 assert_eq!(activate_space(destination), Ok(SpaceSwitch::Switched));
+                let switch_duration = started.elapsed();
                 assert_source_windows_hidden(&source_windows);
+                if round == 0 {
+                    // Catch delayed activation that pulls an empty desktop
+                    // back to a previously focused application's Space.
+                    thread::sleep(Duration::from_millis(600));
+                    assert_eq!(
+                        unsafe {
+                            CGSManagedDisplayGetCurrentSpace(cid, test_display.as_CFTypeRef())
+                        },
+                        destination_id
+                    );
+                }
                 if round == 0 && std::env::var_os("FTS_TEST_SCREENSHOTS").is_some() {
                     // Capture a settled frame, rather than the last part of
                     // Mission Control's visual transition.
@@ -502,9 +545,10 @@ mod tests {
                 assert_eq!(activate_space(original_index), Ok(SpaceSwitch::Switched));
                 assert_source_windows_hidden(&destination_windows);
                 eprintln!(
-                    "Space {original_index} → {destination} → {original_index}: verified {} source and {} destination windows hidden",
+                    "Space {original_index} → {destination} → {original_index}: verified {} source and {} destination windows hidden (switch: {:?})",
                     source_windows.len(),
-                    destination_windows.len()
+                    destination_windows.len(),
+                    switch_duration
                 );
             }
         }
