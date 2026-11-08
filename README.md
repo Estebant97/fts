@@ -15,13 +15,52 @@ Hold **Option** and tap **1**–**9** to switch to that Mission Control Space on
   - **Input Monitoring** — required on newer macOS builds for global key grab
   - **Screen Recording** — other apps’ window titles are blank in `CGWindowList` without it
 
-Grant these to the `fts` binary, or to the Terminal / IDE that launches it.
+Grant these to **Fast True Switcher** when using the installed app, or to the
+Terminal / IDE when running with Cargo.
+
+## Install as a Dock app
+
+```bash
+python3 scripts/macos.py install
+```
+
+This builds a locally signed **Fast True Switcher.app**, installs it in
+`~/Applications`, and registers a per-user launch agent. The app starts right
+away and at login, runs without a terminal, and restarts after a crash. It runs
+in your logged-in desktop session so it can intercept hotkeys and focus windows.
+
+Click its Dock icon to open the status and permission guidance window. Closing
+that window keeps the switcher running. **⌘Q** or **Quit** from the Dock stops
+it until you open the app again or log in. To retain the icon when stopped,
+right-click it in the Dock and choose **Options → Keep in Dock**.
+
+After granting permissions, quit and reopen the app. The installed app needs its
+own grants even if Terminal was already allowed. Local ad-hoc signing is for
+development; macOS may request permissions again after rebuilding the app.
+
+```bash
+python3 scripts/macos.py status         # Service details
+python3 scripts/macos.py stop           # Stop until the next start or login
+python3 scripts/macos.py start          # Start again
+python3 scripts/macos.py disable-login # Stop and remove launch at login; keep the app
+```
+
+Logs are in `~/Library/Logs/Fast True Switcher/fts.log` and `fts-error.log`.
+To build the bundle without installing or enabling launch at login:
+
+```bash
+python3 scripts/macos.py build
+open "target/release/Fast True Switcher.app"
+```
 
 ## Build and run
 
 ```bash
 cargo run --release
 ```
+
+Cargo runs also show a Dock icon. Only one copy of the switcher can run at a time;
+quit an existing copy before switching between Cargo and the installed app.
 
 Optional:
 

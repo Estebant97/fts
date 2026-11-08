@@ -2,14 +2,11 @@
 
 use cocoa::{
     appkit::{
-        NSApplication, NSApplicationActivationPolicyAccessory, NSBackingStoreBuffered, NSColor,
-        NSEvent, NSEventMask, NSEventType, NSMainMenuWindowLevel, NSScreen, NSTextField, NSView,
+        NSBackingStoreBuffered, NSColor, NSMainMenuWindowLevel, NSScreen, NSTextField, NSView,
         NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
     },
     base::{NO, YES, id, nil},
-    foundation::{
-        NSAutoreleasePool, NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString,
-    },
+    foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString},
 };
 use objc::{class, msg_send, sel, sel_impl};
 
@@ -27,7 +24,6 @@ const LABEL_MARGIN: f64 = 18.0;
 const MAX_ROWS: usize = 7;
 
 pub struct OverlayState {
-    app: id,
     panel: id,
     content_view: id,
     header_label: id,
@@ -43,7 +39,12 @@ impl OverlayWindow {
         Self::Enabled(OverlayState::new())
     }
 
-    pub fn show_selection(&self, position: usize, total_windows: usize, entries: &[(usize, Window, bool)]) {
+    pub fn show_selection(
+        &self,
+        position: usize,
+        total_windows: usize,
+        entries: &[(usize, Window, bool)],
+    ) {
         if let Self::Enabled(overlay) = self {
             overlay.show_selection(position, total_windows, entries);
         }
@@ -54,21 +55,11 @@ impl OverlayWindow {
             overlay.hide();
         }
     }
-
-    pub fn pump_events(&self) {
-        if let Self::Enabled(overlay) = self {
-            overlay.pump_events();
-        }
-    }
 }
 
 impl OverlayState {
     fn new() -> Self {
         unsafe {
-            let app = NSApplication::sharedApplication(nil);
-            app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);
-            app.finishLaunching();
-
             let height = HEADER_HEIGHT + (MAX_ROWS as f64) * ROW_HEIGHT + LABEL_MARGIN;
             let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PANEL_WIDTH, height));
             let style = NSWindowStyleMask::NSBorderlessWindowMask;
@@ -126,7 +117,6 @@ impl OverlayState {
             }
 
             Self {
-                app,
                 panel,
                 content_view,
                 header_label,
@@ -161,29 +151,6 @@ impl OverlayState {
     fn hide(&self) {
         unsafe {
             self.panel.orderOut_(nil);
-            self.pump_events();
-        }
-    }
-
-    fn pump_events(&self) {
-        unsafe {
-            loop {
-                let event = self.app.nextEventMatchingMask_untilDate_inMode_dequeue_(
-                    NSEventMask::NSAnyEventMask.bits(),
-                    NSDate::distantPast(nil),
-                    NSDefaultRunLoopMode,
-                    YES,
-                );
-
-                if event == nil {
-                    break;
-                }
-
-                match event.eventType() {
-                    NSEventType::NSKeyDown | NSEventType::NSKeyUp | NSEventType::NSFlagsChanged => {}
-                    _ => self.app.sendEvent_(event),
-                }
-            }
         }
     }
 
@@ -192,7 +159,6 @@ impl OverlayState {
             position_on_active_screen(self.panel);
             self.panel.orderFrontRegardless();
             self.refresh();
-            self.pump_events();
         }
     }
 
