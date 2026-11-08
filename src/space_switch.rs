@@ -9,6 +9,7 @@ pub enum SpaceSwitch {
 pub trait SpaceTransition {
     type Error;
     fn is_current(&mut self) -> Result<bool, Self::Error>;
+    fn prepare(&mut self) {}
     fn press_destination(&mut self) -> Result<(), Self::Error>;
     fn wait(&mut self);
     fn timeout(&self) -> Self::Error;
@@ -18,6 +19,7 @@ pub fn switch_space<T: SpaceTransition>(transition: &mut T) -> Result<SpaceSwitc
     if transition.is_current()? {
         return Ok(SpaceSwitch::AlreadyActive);
     }
+    transition.prepare();
     transition.press_destination()?;
     for _ in 0..40 {
         transition.wait();
@@ -36,6 +38,7 @@ mod tests {
     struct Fake {
         current: VecDeque<Result<bool, &'static str>>,
         presses: usize,
+        preparations: usize,
         waits: usize,
         press_error: Option<&'static str>,
     }
@@ -45,6 +48,7 @@ mod tests {
             Self {
                 current: current.iter().copied().collect(),
                 presses: 0,
+                preparations: 0,
                 waits: 0,
                 press_error: None,
             }
@@ -56,7 +60,15 @@ mod tests {
         fn is_current(&mut self) -> Result<bool, Self::Error> {
             self.current.pop_front().unwrap_or(Ok(false))
         }
+        fn prepare(&mut self) {
+            self.preparations += 1;
+        }
         fn press_destination(&mut self) -> Result<(), Self::Error> {
+            assert_eq!(
+                self.preparations,
+                self.presses + 1,
+                "prepare the visual transition before pressing the destination"
+            );
             self.presses += 1;
             self.press_error.map_or(Ok(()), Err)
         }
@@ -72,7 +84,7 @@ mod tests {
     fn active_destination_does_not_open_mission_control() {
         let mut t = Fake::new(&[Ok(true)]);
         assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::AlreadyActive));
-        assert_eq!((t.presses, t.waits), (0, 0));
+        assert_eq!((t.presses, t.waits, t.preparations), (0, 0, 0));
     }
 
     #[test]
@@ -101,7 +113,7 @@ mod tests {
     fn read_failure_is_not_treated_as_an_empty_space() {
         let mut t = Fake::new(&[Err("no display")]);
         assert_eq!(switch_space(&mut t), Err("no display"));
-        assert_eq!(t.presses, 0);
+        assert_eq!((t.presses, t.preparations), (0, 0));
     }
 
     #[test]
@@ -118,5 +130,20 @@ mod tests {
         assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::Switched));
         assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::AlreadyActive));
         assert_eq!((t.presses, t.waits), (2, 3));
+    }
+
+    #[test]
+    fn repeating_completed_request_does_not_capture_a_second_transition() {
+        let mut t = Fake::new(&[Ok(false), Ok(true), Ok(true)]);
+        assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::Switched));
+        assert_eq!(switch_space(&mut t), Ok(SpaceSwitch::AlreadyActive));
+        assert_eq!((t.preparations, t.presses), (1, 1));
+    }
+
+    #[test]
+    fn destination_read_failure_does_not_repeat_preparation_or_press() {
+        let mut t = Fake::new(&[Ok(false), Err("display disconnected")]);
+        assert_eq!(switch_space(&mut t), Err("display disconnected"));
+        assert_eq!((t.preparations, t.presses, t.waits), (1, 1, 1));
     }
 }
