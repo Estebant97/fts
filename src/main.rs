@@ -1,8 +1,8 @@
 mod browser_profile;
 mod focus_resolve;
 mod gesture;
-mod mru_list;
 mod mission_control;
+mod mru_list;
 mod space_index;
 mod space_switch;
 mod switch_commit;
@@ -13,7 +13,11 @@ mod window_identity;
 #[cfg(target_os = "macos")]
 mod active_windows;
 #[cfg(target_os = "macos")]
+mod app;
+#[cfg(target_os = "macos")]
 mod focus_window;
+#[cfg(target_os = "macos")]
+mod instance;
 #[cfg(target_os = "macos")]
 mod overlay_window;
 #[cfg(target_os = "macos")]
@@ -25,8 +29,6 @@ mod window;
 #[cfg(target_os = "macos")]
 mod window_tracker;
 
-#[cfg(target_os = "macos")]
-pub(crate) use window::window::Window;
 #[cfg(target_os = "macos")]
 use focus_window::focus_window;
 #[cfg(target_os = "macos")]
@@ -48,9 +50,9 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 use std::thread;
 #[cfg(target_os = "macos")]
-use std::time::Duration;
-#[cfg(target_os = "macos")]
 use switch_commit::switch_commit_after_focus;
+#[cfg(target_os = "macos")]
+pub(crate) use window::window::Window;
 #[cfg(target_os = "macos")]
 use window_tracker::WindowTracker;
 
@@ -60,6 +62,7 @@ enum SwitcherEvent {
     GoToWorkspace { index: u8 },
     Cancel,
     CtrlReleased,
+    KeyboardFailed,
 }
 
 #[cfg(target_os = "macos")]
@@ -95,10 +98,24 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() {
+    let _instance = match instance::InstanceLock::acquire() {
+        Ok(instance::Instance::Primary(lock)) => lock,
+        Ok(instance::Instance::Existing(pid)) => {
+            instance::activate_existing(pid);
+            return;
+        }
+        Err(error) => {
+            eprintln!("Could not acquire the fts instance lock: {error}");
+            std::process::exit(1);
+        }
+    };
+    let app = app::App::new(std::env::args().any(|arg| arg == "--background"));
     let trusted = ensure_accessibility_trust(true);
     print_permission_guidance(trusted);
     if !trusted {
-        eprintln!("Continuing, but focus and window enumeration may fail until Accessibility is granted.\n");
+        eprintln!(
+            "Continuing, but focus and window enumeration may fail until Accessibility is granted.\n"
+        );
     }
 
     let mut tracker = WindowTracker::new();
@@ -130,6 +147,7 @@ fn main() {
     let session_listener = Arc::clone(&session_active);
 
     thread::spawn(move || {
+        let error_tx = tx.clone();
         let result = grab(move |event: Event| {
             let mut state = gesture_listener.lock().unwrap();
             let session = session_listener.load(Ordering::SeqCst);
@@ -162,97 +180,103 @@ fn main() {
         if let Err(error) = result {
             eprintln!("Error grabbing keyboard events: {:?}", error);
             eprintln!("Grant Accessibility / Input Monitoring and restart fts.");
+            let _ = error_tx.send(SwitcherEvent::KeyboardFailed);
         }
     });
 
-    loop {
-        overlay.pump_events();
+    app.set_status(if trusted {
+        "Running in the background"
+    } else {
+        "Accessibility permission required"
+    });
 
-        match rx.recv_timeout(Duration::from_millis(16)) {
-            Ok(event) => match event {
-                SwitcherEvent::SpacePressed { reverse } => {
-                    if !tracker.is_switching() {
-                        tracker.begin_switching();
-                        session_active.store(true, Ordering::SeqCst);
-                    }
-
-                    let selected = if reverse {
-                        tracker.reverse_selection()
-                    } else {
-                        tracker.advance_selection()
-                    };
-
-                    if selected.is_some() {
-                        let position = tracker.selected_position().unwrap_or(0) + 1;
-                        let total = tracker.len();
-                        let entries = tracker.overlay_entries(3);
-                        if let Some(window) = tracker.selected_window() {
-                            overlay.show_selection(position, total, &entries);
-                            print_switching_selection(position, total, &window);
-                        }
-                    } else if tracker.len() < 2 {
-                        println!("[switch] Need at least two windows to cycle");
-                    }
+    app.run(|| match rx.try_recv() {
+        Ok(event) => match event {
+            SwitcherEvent::KeyboardFailed => {
+                app.set_status("Allow keyboard access, then restart");
+            }
+            SwitcherEvent::SpacePressed { reverse } => {
+                if !tracker.is_switching() {
+                    tracker.begin_switching();
+                    session_active.store(true, Ordering::SeqCst);
                 }
-                SwitcherEvent::GoToWorkspace { index } => {
-                    if tracker.is_switching() {
-                        println!("\n[switch] Cancelled (workspace change)\n");
-                        overlay.hide();
-                        tracker.cancel_switching();
-                        session_active.store(false, Ordering::SeqCst);
-                    }
 
-                    match spaces::activate_space(index) {
-                        Ok(SpaceSwitch::AlreadyActive) => {
-                            println!("[workspace] Already on Space {index}");
-                        }
-                        Ok(SpaceSwitch::Switched) => {
-                            println!("[workspace] Switched to Space {index}");
-                            tracker.refresh_windows();
-                            tracker.observe_focused_window();
-                        }
-                        Err(error) => {
-                            eprintln!("[workspace] Could not switch to Space {index}: {error}");
-                        }
-                    }
-                }
-                SwitcherEvent::Cancel => {
-                    if tracker.is_switching() {
-                        println!("\n[switch] Cancelled\n");
-                        overlay.hide();
-                        tracker.cancel_switching();
-                        session_active.store(false, Ordering::SeqCst);
-                    }
-                }
-                SwitcherEvent::CtrlReleased => {
-                    if !tracker.is_switching() {
-                        continue;
-                    }
+                let selected = if reverse {
+                    tracker.reverse_selection()
+                } else {
+                    tracker.advance_selection()
+                };
 
+                if selected.is_some() {
+                    let position = tracker.selected_position().unwrap_or(0) + 1;
+                    let total = tracker.len();
+                    let entries = tracker.overlay_entries(3);
                     if let Some(window) = tracker.selected_window() {
-                        println!("\nFocusing: {}\n", window.display_label());
-                        let focus_ok = match focus_window(&window) {
-                            Ok(()) => true,
-                            Err(error) => {
-                                eprintln!("Focus failed: {:?}", error);
-                                false
-                            }
-                        };
-                        apply_focus_commit(&mut tracker, focus_ok);
-                    } else {
-                        tracker.cancel_switching();
+                        overlay.show_selection(position, total, &entries);
+                        print_switching_selection(position, total, &window);
                     }
-
+                } else if tracker.len() < 2 {
+                    println!("[switch] Need at least two windows to cycle");
+                }
+            }
+            SwitcherEvent::GoToWorkspace { index } => {
+                if tracker.is_switching() {
+                    println!("\n[switch] Cancelled (workspace change)\n");
                     overlay.hide();
+                    tracker.cancel_switching();
                     session_active.store(false, Ordering::SeqCst);
                 }
-            },
-            Err(_) => {
-                tracker.observe_focused_window();
-                tracker.maybe_refresh_windows();
+
+                match spaces::activate_space(index) {
+                    Ok(SpaceSwitch::AlreadyActive) => {
+                        println!("[workspace] Already on Space {index}");
+                    }
+                    Ok(SpaceSwitch::Switched) => {
+                        println!("[workspace] Switched to Space {index}");
+                        tracker.refresh_windows();
+                        tracker.observe_focused_window();
+                    }
+                    Err(error) => {
+                        eprintln!("[workspace] Could not switch to Space {index}: {error}");
+                    }
+                }
             }
+            SwitcherEvent::Cancel => {
+                if tracker.is_switching() {
+                    println!("\n[switch] Cancelled\n");
+                    overlay.hide();
+                    tracker.cancel_switching();
+                    session_active.store(false, Ordering::SeqCst);
+                }
+            }
+            SwitcherEvent::CtrlReleased => {
+                if !tracker.is_switching() {
+                    return;
+                }
+
+                if let Some(window) = tracker.selected_window() {
+                    println!("\nFocusing: {}\n", window.display_label());
+                    let focus_ok = match focus_window(&window) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            eprintln!("Focus failed: {:?}", error);
+                            false
+                        }
+                    };
+                    apply_focus_commit(&mut tracker, focus_ok);
+                } else {
+                    tracker.cancel_switching();
+                }
+
+                overlay.hide();
+                session_active.store(false, Ordering::SeqCst);
+            }
+        },
+        Err(_) => {
+            tracker.observe_focused_window();
+            tracker.maybe_refresh_windows();
         }
-    }
+    });
 }
 
 /// Commit or abandon the switcher session based on whether focus succeeded.

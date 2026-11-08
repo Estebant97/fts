@@ -239,7 +239,7 @@ fn regular_app_pids() -> HashMap<i32, String> {
             }
 
             let pid: i32 = msg_send![app, processIdentifier];
-            if pid <= 0 {
+            if pid <= 0 || pid == std::process::id() as i32 {
                 continue;
             }
 
