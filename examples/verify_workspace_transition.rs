@@ -19,59 +19,7 @@ mod space_switch;
 #[path = "../src/spaces.rs"]
 mod spaces;
 #[cfg(target_os = "macos")]
-#[path = "../src/transition_cover.rs"]
-mod transition_cover;
-
-#[cfg(target_os = "macos")]
-fn assert_no_cover_windows() {
-    use core_foundation::{
-        array::CFArray,
-        base::{CFType, CFTypeRef, TCFType},
-        dictionary::CFDictionary,
-        number::CFNumber,
-        string::CFString,
-    };
-    use core_graphics::display::{
-        CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly,
-    };
-    fn number(row: &CFDictionary, key: &str) -> Option<i64> {
-        let key = CFString::new(key);
-        let raw = *row.find(key.as_CFTypeRef())? as CFTypeRef;
-        unsafe { CFType::wrap_under_get_rule(raw) }
-            .downcast::<CFNumber>()?
-            .to_i64()
-    }
-    for _ in 0..20 {
-        let raw =
-            unsafe { CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) };
-        assert!(!raw.is_null(), "read visible windows");
-        let rows = unsafe { CFArray::<CFDictionary>::wrap_under_create_rule(raw as *const _) };
-        let visible = rows.iter().any(|row| {
-            number(&row, "kCGWindowOwnerPID") == Some(i64::from(std::process::id()))
-                && number(&row, "kCGWindowLayer") == Some(1000)
-        });
-        if !visible {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("a transition snapshot was left visible");
-}
-
-#[cfg(target_os = "macos")]
 fn main() {
-    let bare = std::env::var_os("FTS_TEST_BARE").is_some();
-    if bare {
-        use cocoa::{
-            appkit::{NSApplication, NSApplicationActivationPolicyAccessory},
-            base::nil,
-        };
-        unsafe {
-            let app = NSApplication::sharedApplication(nil);
-            app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);
-            app.finishLaunching();
-        }
-    }
     unsafe extern "C" {
         fn CGSessionCopyCurrentDictionary() -> core_foundation::dictionary::CFDictionaryRef;
     }
@@ -109,34 +57,32 @@ fn main() {
         );
         std::process::exit(1);
     };
-    struct Restore(u8, bool);
+    use cocoa::{
+        appkit::{NSApplication, NSApplicationActivationPolicyAccessory},
+        base::nil,
+    };
+    unsafe {
+        let app = NSApplication::sharedApplication(nil);
+        app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);
+        app.finishLaunching();
+    }
+    struct Restore(u8);
     impl Drop for Restore {
         fn drop(&mut self) {
-            let _ = spaces::activate_space_impl(self.0, self.1);
+            if let Err(error) = spaces::activate_space(self.0) {
+                eprintln!("Could not restore initial desktop: {error}");
+            }
         }
     }
-    let _restore = Restore(original, !bare);
-    // Exercise early error cleanup while the process remains alive, so process
-    // exit cannot hide a leaked panel from this check.
-    let failed: Result<(), &str> = (|| {
-        if bare {
-            return Err("skip cover for baseline");
-        }
-        let _cover =
-            transition_cover::TransitionCover::begin().expect("transition snapshot unavailable");
-        Err("simulated backend failure")
-    })();
-    assert!(failed.is_err());
-    assert_no_cover_windows();
+    let _restore = Restore(original);
     for index in indexes {
         println!(
             "Space {index}: {:?}",
-            spaces::activate_space_impl(index, !bare).expect("desktop switch failed")
+            spaces::activate_space(index).expect("desktop switch failed")
         );
-        assert_no_cover_windows();
         if std::env::var_os("FTS_TEST_SCREENSHOTS").is_some() {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            let path = format!("/tmp/fts-covered-space-{index}.png");
+            let path = format!("/tmp/fts-space-{index}.png");
             assert!(
                 std::process::Command::new("/usr/sbin/screencapture")
                     .args(["-x", &path])

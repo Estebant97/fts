@@ -75,15 +75,7 @@ impl std::error::Error for SpaceError {}
 /// Activate a user desktop through Dock, which owns window visibility, focus,
 /// and menu-bar state. Setting CGSManagedDisplaySetCurrentSpace alone bypasses
 /// that transition and can leave windows and menu bars from multiple Spaces.
-/// An in-memory snapshot covers the desktop motion during the native switch.
 pub fn activate_space(index: u8) -> Result<SpaceSwitch, SpaceError> {
-    activate_space_impl(index, true)
-}
-
-pub(crate) fn activate_space_impl(
-    index: u8,
-    hide_animation: bool,
-) -> Result<SpaceSwitch, SpaceError> {
     let cid = unsafe { CGSMainConnectionID() };
     let active = unsafe { CGSGetActiveSpace(cid) };
     let displays = copy_user_spaces_per_display(cid)?;
@@ -110,8 +102,6 @@ pub(crate) fn activate_space_impl(
         thumbnail,
         dock: None,
         opened_overview: false,
-        hide_animation,
-        cover: None,
     };
     let result = switch_space(&mut transition);
     if result.is_err() {
@@ -127,8 +117,6 @@ struct DockTransition {
     thumbnail: usize,
     dock: Option<AXUIElement>,
     opened_overview: bool,
-    hide_animation: bool,
-    cover: Option<crate::transition_cover::TransitionCover>,
 }
 
 impl DockTransition {
@@ -161,16 +149,6 @@ impl SpaceTransition for DockTransition {
             .as_ref()
             .is_some_and(|dock| child_with_id(dock, "mc").is_some());
         Ok(current == self.space_id && !overview_open)
-    }
-    fn prepare(&mut self) {
-        if self.hide_animation {
-            match crate::transition_cover::TransitionCover::begin() {
-                Ok(cover) => self.cover = Some(cover),
-                Err(error) => {
-                    eprintln!("[workspace] {error}; using the visible Mission Control transition")
-                }
-            }
-        }
     }
     fn press_destination(&mut self) -> Result<(), SpaceError> {
         if !crate::permissions::ensure_accessibility_trust(false) {
@@ -516,7 +494,7 @@ mod tests {
         struct Restore(u8);
         impl Drop for Restore {
             fn drop(&mut self) {
-                if let Err(error) = activate_space_impl(self.0, false) {
+                if let Err(error) = activate_space(self.0) {
                     eprintln!("Could not restore initial desktop: {error}");
                 }
             }
@@ -533,10 +511,7 @@ mod tests {
                 let destination_id = spaces[usize::from(destination - 1)];
                 let source_windows = windows_exclusive_to_source(cid, original, destination_id);
                 let started = std::time::Instant::now();
-                assert_eq!(
-                    activate_space_impl(destination, false),
-                    Ok(SpaceSwitch::Switched)
-                );
+                assert_eq!(activate_space(destination), Ok(SpaceSwitch::Switched));
                 let switch_duration = started.elapsed();
                 assert_source_windows_hidden(&source_windows);
                 if round == 0 {
@@ -564,16 +539,10 @@ mod tests {
                         "Screen Recording permission is required for screenshots"
                     );
                 }
-                assert_eq!(
-                    activate_space_impl(destination, false),
-                    Ok(SpaceSwitch::AlreadyActive)
-                );
+                assert_eq!(activate_space(destination), Ok(SpaceSwitch::AlreadyActive));
                 let destination_windows =
                     windows_exclusive_to_source(cid, destination_id, original);
-                assert_eq!(
-                    activate_space_impl(original_index, false),
-                    Ok(SpaceSwitch::Switched)
-                );
+                assert_eq!(activate_space(original_index), Ok(SpaceSwitch::Switched));
                 assert_source_windows_hidden(&destination_windows);
                 eprintln!(
                     "Space {original_index} → {destination} → {original_index}: verified {} source and {} destination windows hidden (switch: {:?})",

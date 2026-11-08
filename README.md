@@ -38,10 +38,7 @@ FTS_DISABLE_OVERLAY=1 cargo run --release
 - Left and right Option both work; keypad digits map the same as the top row
 - If a Ctrl+Space session is open, Option+N cancels it before changing Space
 - Requesting a Space that does not exist is a no-op (logged)
-- Space switches use Mission Control’s desktop buttons so Dock updates windows, focus, and the menu bar together
-- A stationary desktop snapshot hides the Mission Control motion, then reveals the destination with a cut; macOS still needs a short time to complete the switch, and the native menu bar stays uncovered
-- Transition snapshots use the app’s existing Screen Recording access, stay in memory, and are discarded after success or failure; no macOS animation setting is changed
-- If Screen Recording is unavailable, switching falls back to the normal visible Mission Control transition
+- Space switches use Mission Control’s desktop buttons so Dock updates windows, focus, and the menu bar together; the overview briefly appears during a switch
 - A switch is reported successful only after the destination display confirms its current Space
 - Space discovery uses private SkyLight / CGS APIs and switching uses Mission Control Accessibility elements (Dock on older macOS, WindowManager on macOS 27+); these may change on macOS updates
 - The window list refreshes about once per second, when a session starts, and after a Space change
@@ -89,15 +86,15 @@ For optional screenshots of each destination, grant Screen Recording access and
 run `FTS_TEST_SCREENSHOTS=1 cargo test live_desktop_round_trip -- --ignored --nocapture`.
 Images are written to `/tmp/fts-space-N.png`.
 
-To check the complete visual transition on the main thread, including the stationary
-snapshot, pass destination desktop numbers and end with the starting desktop:
+To check the production switch path on the main thread, pass destination desktop
+numbers and end with the starting desktop (repeat a number to check a no-op):
 
 ```bash
-cargo run --example verify_workspace_transition -- 2 3 1
+cargo run --example verify_workspace_transition -- 2 2 3 1
 ```
 
-The example returns to the last desktop number if a request fails. Run it on an
-unlocked Mac with the same Accessibility and Screen Recording grants as `fts`.
-Repeated requests for the current desktop do not create a snapshot.
-Set `FTS_TEST_SCREENSHOTS=1` to save destination captures in `/tmp/fts-covered-space-N.png`.
-For comparison with the uncovered native transition, set `FTS_TEST_BARE=1`.
+The example attempts to return to the last desktop number if a request fails.
+Run it on an unlocked Mac with Accessibility access. Screen Recording is needed
+only for optional captures: set `FTS_TEST_SCREENSHOTS=1` to save them in
+`/tmp/fts-space-N.png`. Check the windows and menu bar visually as well as the
+reported result; destination confirmation alone does not verify rendering.

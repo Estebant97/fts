@@ -21,8 +21,6 @@ mod permissions;
 #[cfg(target_os = "macos")]
 mod spaces;
 #[cfg(target_os = "macos")]
-mod transition_cover;
-#[cfg(target_os = "macos")]
 mod window;
 #[cfg(target_os = "macos")]
 mod window_tracker;
